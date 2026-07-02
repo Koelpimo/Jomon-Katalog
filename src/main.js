@@ -89,6 +89,7 @@ async function boot() {
       (it) =>
         new Promise((resolve) => {
           const img = new Image();
+          img.crossOrigin = "anonymous";
           img.onload = img.onerror = () => {
             done++;
             const loadPct = 32 + Math.round((done / warmup.length) * 68);

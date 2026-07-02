@@ -95,6 +95,7 @@ export class Lightbox {
 
     const src = item.full || item.thumb;
     const loaded = new Image();
+    loaded.crossOrigin = "anonymous";
     loaded.decoding = "async";
     loaded.onload = () => {
       this._natural = { w: loaded.naturalWidth, h: loaded.naturalHeight };
@@ -107,6 +108,7 @@ export class Lightbox {
     loaded.onerror = () => {
       if (src !== item.thumb) {
         const fallback = new Image();
+        fallback.crossOrigin = "anonymous";
         fallback.onload = () => {
           this._natural = { w: fallback.naturalWidth, h: fallback.naturalHeight };
           this.img.src = item.thumb;

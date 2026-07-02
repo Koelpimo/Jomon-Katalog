@@ -189,6 +189,7 @@ export class Gallery {
     const cached = this._textureCache.get(stem);
     if (cached) { this._touchCache(stem); cb(cached); return; }
     const loader = new THREE.TextureLoader();
+    loader.setCrossOrigin("anonymous");
     loader.load(
       thumbUrl,
       (texture) => {
