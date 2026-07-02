@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { filterItems, normalizeCategory, FILTERS } from "./filters.js";
+import { getPreloadedImage } from "./preload.js";
 
 const BG_COLOR = 0xefece5;
 
@@ -95,7 +96,9 @@ export class Gallery {
 
     this._textureCache = new Map();   // stem -> { texture, aspect }
     this._cacheOrder = [];            // LRU order of stems
-    this._cacheLimit = 90;
+    this._cacheLimit = 120;
+    this._textureLoader = new THREE.TextureLoader();
+    this._textureLoader.setCrossOrigin("anonymous");
     this._filterEpoch = 0;
     this._fx = null;   // active filter transition, or null
 
@@ -185,12 +188,31 @@ export class Gallery {
     }
   }
 
+  _entryFromImage(img) {
+    const texture = new THREE.Texture(img);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.anisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
+    texture.generateMipmaps = true;
+    texture.minFilter = THREE.LinearMipmapLinearFilter;
+    texture.needsUpdate = true;
+    const aspect = img.naturalHeight ? img.naturalWidth / img.naturalHeight : 1;
+    return { texture, aspect };
+  }
+
   _loadTexture(stem, thumbUrl, cb) {
     const cached = this._textureCache.get(stem);
     if (cached) { this._touchCache(stem); cb(cached); return; }
-    const loader = new THREE.TextureLoader();
-    loader.setCrossOrigin("anonymous");
-    loader.load(
+
+    const preloaded = getPreloadedImage(stem, thumbUrl);
+    if (preloaded && preloaded.complete && preloaded.naturalWidth > 0) {
+      const entry = this._entryFromImage(preloaded);
+      this._textureCache.set(stem, entry);
+      this._touchCache(stem);
+      cb(entry);
+      return;
+    }
+
+    this._textureLoader.load(
       thumbUrl,
       (texture) => {
         texture.colorSpace = THREE.SRGBColorSpace;

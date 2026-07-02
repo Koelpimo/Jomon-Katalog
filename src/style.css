@@ -318,6 +318,7 @@ html, body {
   justify-content: center;
   background: radial-gradient(ellipse at 50% 42%, #f6f3ec 0%, var(--bg) 68%);
   transition: opacity 0.9s ease, visibility 0.9s ease;
+  pointer-events: auto;
 }
 .loader.hide {
   opacity: 0;

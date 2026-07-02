@@ -1,5 +1,6 @@
 import { Gallery } from "./gallery.js";
 import { Lightbox } from "./lightbox.js";
+import { preloadAllThumbnails } from "./preload.js";
 
 const loaderEl = document.getElementById("loader");
 const loaderBar = document.getElementById("loaderBar");
@@ -20,9 +21,7 @@ async function boot() {
 
   const res = await fetch("./manifest.json", { cache: "no-cache" });
   if (!res.ok) throw new Error("manifest.json nicht erreichbar (" + res.status + ")");
-  setLoaderProgress(18, "Daten werden verarbeitet…");
   const manifest = await res.json();
-
   const items = manifest.items || [];
 
   if (!items.length) {
@@ -30,15 +29,32 @@ async function boot() {
     return;
   }
 
-  setLoaderProgress(28, "Galerie wird vorbereitet…");
+  countEl.textContent = items.length;
+  setLoaderProgress(8, `${items.length} Objekte gefunden…`);
+
+  const { total, ok, failed } = await preloadAllThumbnails(items, {
+    concurrency: 20,
+    onProgress(done, all) {
+      const pct = 8 + Math.round((done / all) * 90);
+      setLoaderProgress(pct, `Thumbnails laden… ${done} / ${all}`);
+    },
+  });
+
+  if (ok === 0) {
+    setLoaderProgress(100, "Bilder konnten nicht geladen werden.");
+    return;
+  }
+
+  if (failed > 0) {
+    setLoaderProgress(98, `${ok} von ${total} Bildern geladen…`);
+  }
+
+  setLoaderProgress(100, "Galerie startet…");
 
   const canvas = document.getElementById("scene");
   const gallery = new Gallery(canvas, items, "figuren");
   const lightbox = new Lightbox();
   const filtersEl = document.getElementById("filters");
-
-  // top-right always shows the total number of objects in the catalog
-  countEl.textContent = items.length;
 
   // --- info modal -----------------------------------------------------------
   const infoModal = document.getElementById("infoModal");
@@ -80,29 +96,7 @@ async function boot() {
     dismissHint();
   });
 
-  // --- preload the first handful of thumbnails for a clean reveal ----------
-  setLoaderProgress(32, "Bilder werden geladen…");
-  const warmup = items.slice(0, Math.min(14, items.length));
-  let done = 0;
-  await Promise.all(
-    warmup.map(
-      (it) =>
-        new Promise((resolve) => {
-          const img = new Image();
-          img.crossOrigin = "anonymous";
-          img.onload = img.onerror = () => {
-            done++;
-            const loadPct = 32 + Math.round((done / warmup.length) * 68);
-            setLoaderProgress(loadPct);
-            resolve();
-          };
-          img.src = it.thumb;
-        })
-    )
-  );
-
-  setLoaderProgress(100, "Fertig");
-  setTimeout(() => loaderEl.classList.add("hide"), 700);
+  setTimeout(() => loaderEl.classList.add("hide"), 400);
 
   // --- input: wheel ---------------------------------------------------------
   window.addEventListener(
