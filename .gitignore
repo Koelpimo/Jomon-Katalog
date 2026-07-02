@@ -7,7 +7,6 @@ __pycache__/
 
 node_modules/
 dist/
-bun.lockb
 
 # Bilder liegen auf R2, nicht im Repo
 assets/
