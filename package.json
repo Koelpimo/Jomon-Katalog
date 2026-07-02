@@ -1,0 +1,10 @@
+{
+  "name": "jomon-katalog",
+  "private": true,
+  "scripts": {
+    "deploy": "wrangler pages deploy . --project-name=jomon-katalog"
+  },
+  "devDependencies": {
+    "wrangler": "^4.107.0"
+  }
+}
