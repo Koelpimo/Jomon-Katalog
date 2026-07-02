@@ -1,0 +1,32 @@
+/** CSV category → UI filter (Buchkapitel) */
+export const FILTERS = [
+  { id: "figuren", label: "01 Figuren", categories: ["Figuren"] },
+  { id: "vasen", label: "02 Vasen", categories: ["Keramik"] },
+  { id: "artefakte", label: "03 Artefakte", categories: ["Alltagswerkzeuge"] },
+  { id: "random", label: "04 Zufall", categories: null },
+];
+
+export function normalizeCategory(value) {
+  return (value || "").trim();
+}
+
+export function filterItems(allItems, filterId) {
+  const def = FILTERS.find((f) => f.id === filterId);
+  if (!def) return allItems.slice();
+
+  if (filterId === "random") {
+    const out = allItems.slice();
+    for (let i = out.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [out[i], out[j]] = [out[j], out[i]];
+    }
+    return out;
+  }
+
+  const allowed = new Set(def.categories);
+  return allItems.filter((item) => allowed.has(normalizeCategory(item.category)));
+}
+
+export function countForFilter(allItems, filterId) {
+  return filterItems(allItems, filterId).length;
+}

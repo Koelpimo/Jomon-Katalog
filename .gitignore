@@ -1,0 +1,18 @@
+# System
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Editor
+.vscode/
+.idea/
+
+# Optional: volle Lightbox-Bilder nicht versionieren (spart ~1.8 GB).
+# Die Galerie funktioniert trotzdem – beim Klick wird das Thumbnail gezeigt.
+# Zum Aktivieren die nächste Zeile auskommentieren:
+# assets/full/
+
+assets/full/
