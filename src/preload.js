@@ -6,16 +6,7 @@ export function getPreloadedImage(stem, url) {
   return byStem.get(stem) || byUrl.get(url) || null;
 }
 
-export function hasPreloadedImage(stem, url) {
-  const img = getPreloadedImage(stem, url);
-  return !!(img && img.complete && img.naturalWidth > 0);
-}
-
-/**
- * Preload every unique thumbnail with bounded parallelism.
- * Resolves when all requests finished (including failures).
- */
-export function preloadAllThumbnails(items, { concurrency = 20, onProgress } = {}) {
+function collectJobs(items) {
   const jobs = [];
   const seen = new Set();
 
@@ -27,55 +18,115 @@ export function preloadAllThumbnails(items, { concurrency = 20, onProgress } = {
     jobs.push({ stem, url });
   }
 
-  const total = jobs.length;
-  if (!total) {
-    onProgress?.(0, 0);
-    return Promise.resolve({ total: 0, ok: 0, failed: 0 });
+  return jobs;
+}
+
+function loadJob({ stem, url }) {
+  if (byStem.has(stem)) {
+    return Promise.resolve(true);
   }
 
-  let done = 0;
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.decoding = "async";
+
+    const finish = (success) => {
+      if (success) {
+        byStem.set(stem, img);
+        byUrl.set(url, img);
+      }
+      resolve(success);
+    };
+
+    img.onload = () => finish(true);
+    img.onerror = () => finish(false);
+    img.src = url;
+  });
+}
+
+async function runQueue(jobs, { concurrency, shouldStop, onEach }) {
+  let index = 0;
   let ok = 0;
   let failed = 0;
-  let index = 0;
 
-  function loadJob({ stem, url }) {
-    if (byStem.has(stem)) {
-      done++;
-      ok++;
-      onProgress?.(done, total);
-      return Promise.resolve();
+  const worker = async () => {
+    while (!shouldStop()) {
+      const i = index++;
+      if (i >= jobs.length) break;
+      const success = await loadJob(jobs[i]);
+      if (success) ok++;
+      else failed++;
+      onEach?.(ok + failed, jobs.length, ok, failed);
     }
+  };
 
-    return new Promise((resolve) => {
-      const img = new Image();
-      img.crossOrigin = "anonymous";
-      img.decoding = "async";
+  const workers = Array.from(
+    { length: Math.min(concurrency, jobs.length) },
+    () => worker()
+  );
+  await Promise.all(workers);
 
-      const finish = (success) => {
-        if (success) {
-          byStem.set(stem, img);
-          byUrl.set(url, img);
-          ok++;
-        } else {
-          failed++;
-        }
-        done++;
-        onProgress?.(done, total);
-        resolve();
-      };
+  return { ok, failed, done: ok + failed };
+}
 
-      img.onload = () => finish(true);
-      img.onerror = () => finish(false);
-      img.src = url;
-    });
+/**
+ * Preload thumbnails with a hard time budget (e.g. 20s), then allow entry.
+ * Remaining images can continue in the background.
+ */
+export async function preloadThumbnailsWithBudget(
+  items,
+  { maxMs = 20000, concurrency = 48, onProgress } = {}
+) {
+  const jobs = collectJobs(items);
+  const total = jobs.length;
+
+  if (!total) {
+    onProgress?.(0, 0, 0);
+    return { total: 0, ok: 0, failed: 0, done: 0, timedOut: false };
   }
 
-  const workers = Array.from({ length: Math.min(concurrency, total) }, async () => {
-    while (index < total) {
-      const job = jobs[index++];
-      await loadJob(job);
-    }
+  const started = performance.now();
+  let ok = 0;
+  let failed = 0;
+  let done = 0;
+
+  const shouldStop = () => performance.now() - started >= maxMs;
+
+  const tick = () => {
+    const elapsed = performance.now() - started;
+    onProgress?.(done, total, elapsed);
+  };
+
+  const budgetPromise = runQueue(jobs, {
+    concurrency,
+    shouldStop,
+    onEach(d, t, o, f) {
+      done = d;
+      ok = o;
+      failed = f;
+      tick();
+    },
   });
 
-  return Promise.all(workers).then(() => ({ total, ok, failed }));
+  await Promise.race([
+    budgetPromise,
+    new Promise((resolve) => setTimeout(resolve, maxMs)),
+  ]);
+
+  tick();
+  const timedOut = done < total;
+
+  return { total, ok, failed, done, timedOut };
+}
+
+/** Continue loading any thumbnails not yet cached (non-blocking). */
+export function preloadRemainingInBackground(items, { concurrency = 16 } = {}) {
+  const jobs = collectJobs(items).filter((job) => !byStem.has(job.stem));
+  if (!jobs.length) return;
+
+  runQueue(jobs, {
+    concurrency,
+    shouldStop: () => false,
+  }).catch(() => {});
 }
