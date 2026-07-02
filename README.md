@@ -40,3 +40,4 @@ Die Seite läuft dann z. B. unter `jomon-katalog.pages.dev`.
 python3 build_manifest.py
 R2_BUCKET=jomon R2_PUBLIC_URL=https://pub-7a7fc559df334dc88ac345e02927d2dd.r2.dev python3 scripts/upload_r2.py
 ```
+
