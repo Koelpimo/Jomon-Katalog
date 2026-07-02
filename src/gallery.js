@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { filterItems, normalizeCategory, FILTERS } from "./filters.js";
+import { filterItems } from "./filters.js";
 import { getPreloadedImage } from "./preload.js";
 
 const BG_COLOR = 0xefece5;
@@ -70,13 +70,6 @@ function layoutOffsets(seed) {
     y += (rand(seed * 12.61) > 0.5 ? 1 : -1) * (4 - cy);
   }
   return { x, y };
-}
-
-function categoryAllowed(item, filterId) {
-  if (filterId === "random") return true;
-  const def = FILTERS.find((f) => f.id === filterId);
-  if (!def || !def.categories) return true;
-  return def.categories.includes(normalizeCategory(item.category));
 }
 
 export class Gallery {
@@ -239,21 +232,14 @@ export class Gallery {
     this._cacheOrder = [];
   }
 
-  _itemAt(seq) {
-    if (!this.N) return null;
-    const idx = ((seq % this.N) + this.N) % this.N;
-    return this.items[idx];
-  }
-
   _listIndexForSeq(seq) {
     if (!this.N) return -1;
     return ((seq % this.N) + this.N) % this.N;
   }
 
-  _seqForPlane(plane, scroll = this.scroll) {
-    const term = plane.index * SPACING - scroll * SPACING;
-    const lap = Math.floor(term / TOTAL);
-    return plane.index - lap * POOL;
+  /** Linear catalogue order: each scroll step advances by one item, no repeat until N. */
+  _absoluteSeqForPlane(plane, scroll = this.scroll) {
+    return Math.floor(scroll) + plane.index;
   }
 
   _clearPlane(plane) {
@@ -277,7 +263,7 @@ export class Gallery {
 
     const listIndex = this._listIndexForSeq(seq);
     const item = this.items[listIndex];
-    if (!item || !categoryAllowed(item, this.filterId)) {
+    if (!item) {
       this._clearPlane(plane);
       return;
     }
@@ -318,12 +304,16 @@ export class Gallery {
       plane.mesh.material.map = entry.texture;
       plane.mesh.material.needsUpdate = true;
       plane.mesh.visible = true;
+      if (this._fx) {
+        plane.appear = 1;
+        plane.mesh.material.opacity = this._fx.phase === "in" ? 0.15 : 1;
+      }
     });
   }
 
   _refreshAllPlanes() {
     for (const plane of this.planes) {
-      this._assignData(plane, this._seqForPlane(plane));
+      this._assignData(plane, this._absoluteSeqForPlane(plane));
     }
   }
 
@@ -351,7 +341,7 @@ export class Gallery {
     this.camera.position.y = -this.pointer.y * 0.35;
 
     for (const plane of this.planes) {
-      const seq = this._seqForPlane(plane, effScroll);
+      const seq = this._absoluteSeqForPlane(plane, effScroll);
       const listIndex = this._listIndexForSeq(seq);
 
       if (
@@ -389,12 +379,18 @@ export class Gallery {
       mesh.rotation.z = roll;
 
       // fade in as it emerges; fade out just before it slips behind the camera
-      if (mesh.visible) {
-        plane.appear = Math.min(1, plane.appear + dt * 4.5);
+      if (this._fx) {
+        if (mesh.visible) {
+          mesh.material.opacity = fxState.fade;
+        }
+      } else {
+        if (mesh.visible) {
+          plane.appear = Math.min(1, plane.appear + dt * 4.5);
+        }
+        const distFront = Z_FRONT - z;
+        const exitFade = THREE.MathUtils.clamp(distFront / 4, 0, 1);
+        mesh.material.opacity = plane.appear * exitFade;
       }
-      const distFront = Z_FRONT - z;          // 0 at exit .. TOTAL at far
-      const exitFade = THREE.MathUtils.clamp(distFront / 4, 0, 1);
-      mesh.material.opacity = plane.appear * exitFade * fxState.fade;
     }
 
     this.renderer.render(this.scene, this.camera);
