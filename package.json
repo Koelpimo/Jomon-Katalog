@@ -2,7 +2,9 @@
   "name": "jomon-katalog",
   "private": true,
   "scripts": {
-    "deploy": "wrangler deploy"
+    "build": "node scripts/prepare-dist.mjs",
+    "postinstall": "node scripts/prepare-dist.mjs",
+    "deploy": "node scripts/prepare-dist.mjs && wrangler deploy"
   },
   "devDependencies": {
     "wrangler": "^4.107.0"
