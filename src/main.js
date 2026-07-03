@@ -1,6 +1,5 @@
 import { Gallery } from "./gallery.js";
 import { Lightbox } from "./lightbox.js";
-import { filterItems } from "./filters.js";
 import { requestThumb } from "./thumbLoader.js";
 
 const loaderEl = document.getElementById("loader");
@@ -82,9 +81,9 @@ async function boot() {
     dismissHint();
   });
 
-  // --- erste sichtbare Bilder der aktiven Kategorie vorladen -----------------
+  // --- erste sichtbare Bilder vorladen ---------------------------------------
   setLoaderProgress(32, "Startbilder werden geladen…");
-  const warmup = filterItems(items, "figuren").slice(0, 30);
+  const warmup = items.slice(0, 30);
   if (warmup.length) {
     let done = 0;
     await Promise.all(
