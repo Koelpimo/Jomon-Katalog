@@ -1,5 +1,6 @@
-import { Gallery, warmWindow } from "./gallery.js";
+import { Gallery } from "./gallery.js";
 import { Lightbox } from "./lightbox.js";
+import { requestThumb } from "./thumbLoader.js";
 
 const loaderEl = document.getElementById("loader");
 const loaderBar = document.getElementById("loaderBar");
@@ -7,10 +8,6 @@ const loaderPct = document.getElementById("loaderPct");
 const loaderText = document.getElementById("loaderText");
 const hintEl = document.getElementById("hint");
 const countEl = document.getElementById("count");
-
-const WARM_COUNT = 50;
-const WARM_MAX_MS = 4000;
-const WARM_MIN_OK = 12;
 
 function setLoaderProgress(pct, text) {
   const p = Math.max(0, Math.min(100, Math.round(pct)));
@@ -24,7 +21,9 @@ async function boot() {
 
   const res = await fetch("./manifest.json", { cache: "no-cache" });
   if (!res.ok) throw new Error("manifest.json nicht erreichbar (" + res.status + ")");
+  setLoaderProgress(18, "Daten werden verarbeitet…");
   const manifest = await res.json();
+
   const items = manifest.items || [];
 
   if (!items.length) {
@@ -32,26 +31,17 @@ async function boot() {
     return;
   }
 
-  countEl.textContent = items.length;
-  setLoaderProgress(15, "Startbilder werden geladen…");
-
-  const { ok } = await warmWindow(items, WARM_COUNT, WARM_MAX_MS, (loaded, total) => {
-    const pct = 15 + Math.round((loaded / total) * 80);
-    setLoaderProgress(pct, `Vorbereitung… ${loaded} / ${total}`);
-  });
-
-  if (ok < WARM_MIN_OK) {
-    setLoaderProgress(100, "Verbindung zu langsam – bitte neu laden.");
-    return;
-  }
-
-  setLoaderProgress(100, "Galerie startet…");
+  setLoaderProgress(28, "Galerie wird vorbereitet…");
 
   const canvas = document.getElementById("scene");
   const gallery = new Gallery(canvas, items, "figuren");
   const lightbox = new Lightbox();
   const filtersEl = document.getElementById("filters");
 
+  // top-right always shows the total number of objects in the catalog
+  countEl.textContent = items.length;
+
+  // --- info modal -----------------------------------------------------------
   const infoModal = document.getElementById("infoModal");
   const infoBtn = document.getElementById("infoBtn");
   const infoClose = document.getElementById("infoClose");
@@ -82,15 +72,33 @@ async function boot() {
     if (!btn) return;
     e.preventDefault();
     e.stopPropagation();
-    gallery.setFilter(btn.dataset.filter);
+
+    const filterId = btn.dataset.filter;
+    gallery.setFilter(filterId);
     filtersEl.querySelectorAll(".hud__filter").forEach((el) => {
       el.classList.toggle("is-active", el === btn);
     });
     dismissHint();
   });
 
-  setTimeout(() => loaderEl.classList.add("hide"), 300);
+  // --- erste sichtbare Bilder vorladen (Rest per Lookahead beim Scrollen) ---
+  setLoaderProgress(32, "Startbilder werden geladen…");
+  const warmup = items.slice(0, Math.min(30, items.length));
+  let done = 0;
+  await Promise.all(
+    warmup.map((it) =>
+      requestThumb(it.stem, it.thumb, 0).then(() => {
+        done++;
+        const loadPct = 32 + Math.round((done / warmup.length) * 68);
+        setLoaderProgress(loadPct);
+      })
+    )
+  );
 
+  setLoaderProgress(100, "Fertig");
+  setTimeout(() => loaderEl.classList.add("hide"), 700);
+
+  // --- input: wheel ---------------------------------------------------------
   window.addEventListener(
     "wheel",
     (e) => {
@@ -101,6 +109,7 @@ async function boot() {
     { passive: false }
   );
 
+  // --- input: keyboard ------------------------------------------------------
   window.addEventListener("keydown", (e) => {
     if (lightbox.isOpen) return;
     if (e.key === "ArrowDown" || e.key === "PageDown" || e.key === " ") {
@@ -112,6 +121,7 @@ async function boot() {
     }
   });
 
+  // --- input: pointer (drag + click) ----------------------------------------
   let dragging = false;
   let moved = 0;
   let lastY = 0;
@@ -181,6 +191,7 @@ async function boot() {
     pointerUp(t.clientX, t.clientY);
   });
 
+  // --- hint dismissal -------------------------------------------------------
   let hintDismissed = false;
   function dismissHint() {
     if (hintDismissed) return;
@@ -188,6 +199,7 @@ async function boot() {
     hintEl.classList.add("hide");
   }
 
+  // --- render loop ----------------------------------------------------------
   function loop() {
     gallery.update();
     requestAnimationFrame(loop);

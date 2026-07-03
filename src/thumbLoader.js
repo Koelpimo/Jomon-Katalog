@@ -1,10 +1,10 @@
 /**
- * Thumbnail loader — HTMLImageElement (correct orientation with Three.js flipY).
- * Priority queue, deduplicated requests, bounded RAM cache.
+ * Lädt nur Thumbnails in der Nähe der aktuellen Scroll-Position.
+ * Priorität: 0 = sichtbar, 1 = Lookahead, 2 = Lookbehind.
  */
 
-const MAX_ACTIVE = 16;
-const MAX_RAM = 400;
+const MAX_ACTIVE = 10;
+const MAX_RAM = 160;
 
 const images = new Map();
 const order = [];
@@ -24,8 +24,7 @@ function remember(stem, img) {
   images.set(stem, img);
   order.push(stem);
   while (order.length > MAX_RAM) {
-    const evict = order.shift();
-    images.delete(evict);
+    images.delete(order.shift());
   }
 }
 
@@ -57,6 +56,12 @@ async function runJob(job) {
   job.resolve(img);
 }
 
+function enqueue(job) {
+  const at = queue.findIndex((j) => j.priority > job.priority);
+  if (at === -1) queue.push(job);
+  else queue.splice(at, 0, job);
+}
+
 function pump() {
   while (active < MAX_ACTIVE && queue.length) {
     const job = queue.shift();
@@ -68,7 +73,7 @@ function pump() {
   }
 }
 
-export function requestThumb(stem, url, priority = 2) {
+export function requestThumb(stem, url, priority = 1) {
   if (!stem || !url) return Promise.resolve(null);
 
   const hit = getCachedImage(stem);
@@ -77,15 +82,12 @@ export function requestThumb(stem, url, priority = 2) {
   const pending = inflight.get(stem);
   if (pending) {
     const job = queue.find((j) => j.stem === stem);
-    if (job) job.priority = Math.min(job.priority, priority);
+    if (job && job.priority > priority) job.priority = priority;
     return pending;
   }
 
   const promise = new Promise((resolve) => {
-    const job = { stem, url, priority, resolve };
-    const at = queue.findIndex((j) => j.priority > priority);
-    if (at === -1) queue.push(job);
-    else queue.splice(at, 0, job);
+    enqueue({ stem, url, priority, resolve });
     pump();
   }).finally(() => inflight.delete(stem));
 
@@ -93,30 +95,8 @@ export function requestThumb(stem, url, priority = 2) {
   return promise;
 }
 
-/** Load a window of thumbs around the start of the catalogue. */
-export async function warmWindow(items, count = 50, maxMs = 4000, onProgress) {
-  const slice = items.slice(0, Math.min(count, items.length));
-  const total = slice.length;
-  if (!total) return { ok: 0, total: 0 };
-
-  let ok = 0;
-  const tick = () => onProgress?.(ok, total);
-
-  const promises = slice.map((item) =>
-    requestThumb(item.stem, item.thumb, 0).then((img) => {
-      if (img) ok++;
-      tick();
-      return img;
-    })
-  );
-
-  await Promise.race([Promise.all(promises), new Promise((r) => setTimeout(r, maxMs))]);
-  tick();
-  return { ok, total };
-}
-
-/** Prefetch catalogue indices (list positions) with priority. */
-export function prefetchIndices(items, indices, priority = 1) {
+/** Prefetch a set of catalogue list indices. */
+export function prefetchListIndices(items, indices, priority = 1) {
   if (!items.length) return;
   const n = items.length;
   const seen = new Set();
@@ -127,18 +107,4 @@ export function prefetchIndices(items, indices, priority = 1) {
     const item = items[idx];
     if (item) requestThumb(item.stem, item.thumb, priority);
   }
-}
-
-/** Build index list for scroll position + lookahead in both directions. */
-export function indicesAround(items, scroll, count, velocity = 0) {
-  const base = Math.floor(scroll);
-  const extra = Math.min(45, Math.ceil(Math.abs(velocity) * 90));
-  const forward = count + extra;
-  const backward = Math.min(18, 6 + Math.ceil(extra * 0.4));
-  const out = [];
-
-  for (let i = 0; i < forward; i++) out.push(base + i);
-  for (let i = 1; i <= backward; i++) out.push(base - i);
-
-  return out;
 }
