@@ -1,5 +1,7 @@
 import { Gallery } from "./gallery.js";
 import { Lightbox } from "./lightbox.js";
+import { filterItems } from "./filters.js";
+import { requestThumb } from "./thumbLoader.js";
 
 const loaderEl = document.getElementById("loader");
 const loaderBar = document.getElementById("loaderBar");
@@ -80,26 +82,21 @@ async function boot() {
     dismissHint();
   });
 
-  // --- preload the first handful of thumbnails for a clean reveal ----------
-  setLoaderProgress(32, "Bilder werden geladen…");
-  const warmup = items.slice(0, Math.min(14, items.length));
-  let done = 0;
-  await Promise.all(
-    warmup.map(
-      (it) =>
-        new Promise((resolve) => {
-          const img = new Image();
-          img.crossOrigin = "anonymous";
-          img.onload = img.onerror = () => {
-            done++;
-            const loadPct = 32 + Math.round((done / warmup.length) * 68);
-            setLoaderProgress(loadPct);
-            resolve();
-          };
-          img.src = it.thumb;
+  // --- erste sichtbare Bilder der aktiven Kategorie vorladen -----------------
+  setLoaderProgress(32, "Startbilder werden geladen…");
+  const warmup = filterItems(items, "figuren").slice(0, 30);
+  if (warmup.length) {
+    let done = 0;
+    await Promise.all(
+      warmup.map((it) =>
+        requestThumb(it.stem, it.thumb, 0).then(() => {
+          done++;
+          const loadPct = 32 + Math.round((done / warmup.length) * 68);
+          setLoaderProgress(loadPct);
         })
-    )
-  );
+      )
+    );
+  }
 
   setLoaderProgress(100, "Fertig");
   setTimeout(() => loaderEl.classList.add("hide"), 700);
