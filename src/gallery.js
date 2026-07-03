@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { filterItems, normalizeCategory, FILTERS } from "./filters.js";
+import { firstCatalogIndex } from "./filters.js";
 
 const BG_COLOR = 0xefece5;
 
@@ -71,20 +71,15 @@ function layoutOffsets(seed) {
   return { x, y };
 }
 
-function categoryAllowed(item, filterId) {
-  if (filterId === "random") return true;
-  const def = FILTERS.find((f) => f.id === filterId);
-  if (!def || !def.categories) return true;
-  return def.categories.includes(normalizeCategory(item.category));
-}
 
 export class Gallery {
   constructor(canvas, items, filterId = "figuren") {
     this.canvas = canvas;
     this.allItems = items;
     this.filterId = filterId;
-    this.items = filterItems(items, filterId);
-    this.N = this.items.length;
+    this.N = items.length;
+    this._order = items.map((_, i) => i);
+    this._catalogBase = firstCatalogIndex(items, filterId);
 
     // start a few steps in so images are already in the sweet spot on first paint
     this.scroll = 0;
@@ -217,15 +212,10 @@ export class Gallery {
     this._cacheOrder = [];
   }
 
-  _itemAt(seq) {
-    if (!this.N) return null;
-    const idx = ((seq % this.N) + this.N) % this.N;
-    return this.items[idx];
-  }
-
   _listIndexForSeq(seq) {
     if (!this.N) return -1;
-    return ((seq % this.N) + this.N) % this.N;
+    const pos = ((seq + this._catalogBase) % this.N + this.N) % this.N;
+    return this._order[pos];
   }
 
   _seqForPlane(plane, scroll = this.scroll) {
@@ -254,8 +244,8 @@ export class Gallery {
     }
 
     const listIndex = this._listIndexForSeq(seq);
-    const item = this.items[listIndex];
-    if (!item || !categoryAllowed(item, this.filterId)) {
+    const item = this.allItems[listIndex];
+    if (!item) {
       this._clearPlane(plane);
       return;
     }
@@ -465,15 +455,24 @@ export class Gallery {
       inDur: mode === "shuffle" ? 0.72 : 0.52,
     };
 
-    return filterItems(this.allItems, filterId).length;
+    return this.N;
   }
 
-  // Actually swap the data set (called at the midpoint of the transition).
   _applyFilterNow(filterId) {
     this.filterId = filterId;
-    this.items = filterItems(this.allItems, filterId);
-    this.N = this.items.length;
     this._filterEpoch += 1;
+
+    if (filterId === "random") {
+      this._order = this.allItems.map((_, i) => i);
+      for (let i = this._order.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [this._order[i], this._order[j]] = [this._order[j], this._order[i]];
+      }
+      this._catalogBase = 0;
+    } else {
+      this._catalogBase = firstCatalogIndex(this.allItems, filterId);
+    }
+
     this._clearTextureCache();
 
     for (const plane of this.planes) {
