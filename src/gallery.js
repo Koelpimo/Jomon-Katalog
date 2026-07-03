@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { filterItems } from "./filters.js";
-import { getPreloadedImage } from "./preload.js";
+import { getCachedThumb, requestThumb, prefetchRange, tickBackgroundPrefetch, startBackgroundPrefetch } from "./thumbLoader.js";
 
 const BG_COLOR = 0xefece5;
 
@@ -90,8 +90,7 @@ export class Gallery {
     this._textureCache = new Map();   // stem -> { texture, aspect }
     this._cacheOrder = [];            // LRU order of stems
     this._cacheLimit = 120;
-    this._textureLoader = new THREE.TextureLoader();
-    this._textureLoader.setCrossOrigin("anonymous");
+    this._prefetchTimer = 0;
     this._filterEpoch = 0;
     this._fx = null;   // active filter transition, or null
 
@@ -181,23 +180,25 @@ export class Gallery {
     }
   }
 
-  _entryFromImage(img) {
-    const texture = new THREE.Texture(img);
+  _entryFromImage(source) {
+    const texture = new THREE.Texture(source);
     texture.colorSpace = THREE.SRGBColorSpace;
     texture.anisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
     texture.generateMipmaps = true;
     texture.minFilter = THREE.LinearMipmapLinearFilter;
     texture.needsUpdate = true;
-    const aspect = img.naturalHeight ? img.naturalWidth / img.naturalHeight : 1;
+    const aspect = source.naturalHeight || source.height
+      ? (source.naturalWidth || source.width) / (source.naturalHeight || source.height)
+      : 1;
     return { texture, aspect };
   }
 
-  _loadTexture(stem, thumbUrl, cb) {
+  _loadTexture(stem, thumbUrl, priority, cb) {
     const cached = this._textureCache.get(stem);
     if (cached) { this._touchCache(stem); cb(cached); return; }
 
-    const preloaded = getPreloadedImage(stem, thumbUrl);
-    if (preloaded && preloaded.complete && preloaded.naturalWidth > 0) {
+    const preloaded = getCachedThumb(stem);
+    if (preloaded) {
       const entry = this._entryFromImage(preloaded);
       this._textureCache.set(stem, entry);
       this._touchCache(stem);
@@ -205,23 +206,19 @@ export class Gallery {
       return;
     }
 
-    this._textureLoader.load(
-      thumbUrl,
-      (texture) => {
-        texture.colorSpace = THREE.SRGBColorSpace;
-        texture.anisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
-        texture.generateMipmaps = true;
-        texture.minFilter = THREE.LinearMipmapLinearFilter;
-        const img = texture.image;
-        const aspect = img && img.height ? img.width / img.height : 1;
-        const entry = { texture, aspect };
-        this._textureCache.set(stem, entry);
-        this._touchCache(stem);
-        cb(entry);
-      },
-      undefined,
-      () => cb(null)
-    );
+    requestThumb(stem, thumbUrl, priority).then((source) => {
+      if (!source) { cb(null); return; }
+      const entry = this._entryFromImage(source);
+      this._textureCache.set(stem, entry);
+      this._touchCache(stem);
+      cb(entry);
+    });
+  }
+
+  _prefetchAround(scroll) {
+    const base = Math.floor(scroll);
+    prefetchRange(this.items, base, POOL + 8, 0);
+    prefetchRange(this.items, base + POOL, 40, 1);
   }
 
   _clearTextureCache() {
@@ -297,7 +294,7 @@ export class Gallery {
     plane.mesh.material.needsUpdate = true;
 
     const requested = item.stem;
-    this._loadTexture(item.stem, item.thumb, (entry) => {
+    this._loadTexture(item.stem, item.thumb, 0, (entry) => {
       if (plane.stem !== requested) return;
       if (!entry) return;
       plane.aspect = entry.aspect;
@@ -339,6 +336,13 @@ export class Gallery {
     this.camera.rotation.z = fxState.camRoll;
     this.camera.position.x = -this.pointer.x * 0.5;
     this.camera.position.y = -this.pointer.y * 0.35;
+
+    this._prefetchTimer += dt;
+    if (this._prefetchTimer >= 0.12) {
+      this._prefetchTimer = 0;
+      this._prefetchAround(effScroll);
+    }
+    tickBackgroundPrefetch();
 
     for (const plane of this.planes) {
       const seq = this._absoluteSeqForPlane(plane, effScroll);
@@ -501,6 +505,7 @@ export class Gallery {
     this.scroll = 0;
     this.target = 0;
     this.velocity = 0;
+    startBackgroundPrefetch(this.items);
     this._refreshAllPlanes();
     return this.N;
   }

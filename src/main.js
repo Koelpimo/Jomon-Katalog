@@ -1,8 +1,6 @@
 import { Gallery } from "./gallery.js";
 import { Lightbox } from "./lightbox.js";
-import { preloadThumbnailsWithBudget, preloadRemainingInBackground } from "./preload.js";
-
-const MAX_LOAD_MS = 20000;
+import { warmInitial, startBackgroundPrefetch } from "./thumbLoader.js";
 
 const loaderEl = document.getElementById("loader");
 const loaderBar = document.getElementById("loaderBar");
@@ -32,17 +30,11 @@ async function boot() {
   }
 
   countEl.textContent = items.length;
-  setLoaderProgress(8, `${items.length} Objekte gefunden…`);
+  setLoaderProgress(12, "Erste Bilder werden geladen…");
 
-  const { total, ok, done, timedOut } = await preloadThumbnailsWithBudget(items, {
-    maxMs: MAX_LOAD_MS,
-    concurrency: 48,
-    onProgress(loaded, all, elapsedMs) {
-      const timePct = Math.min(1, elapsedMs / MAX_LOAD_MS);
-      const countPct = all ? loaded / all : 1;
-      const pct = 8 + Math.round(Math.min(timePct, countPct) * 90);
-      setLoaderProgress(pct, `Bilder laden… ${loaded} / ${all}`);
-    },
+  const { ok } = await warmInitial(items, 30, 3500, (loaded, total) => {
+    const pct = 12 + Math.round((loaded / total) * 85);
+    setLoaderProgress(pct, `Startansicht… ${loaded} / ${total}`);
   });
 
   if (ok === 0) {
@@ -50,9 +42,8 @@ async function boot() {
     return;
   }
 
-  setLoaderProgress(100, timedOut ? "Galerie startet…" : "Fertig");
-
-  preloadRemainingInBackground(items);
+  setLoaderProgress(100, "Galerie startet…");
+  startBackgroundPrefetch(items);
 
   const canvas = document.getElementById("scene");
   const gallery = new Gallery(canvas, items, "figuren");
@@ -99,7 +90,7 @@ async function boot() {
     dismissHint();
   });
 
-  setTimeout(() => loaderEl.classList.add("hide"), 400);
+  setTimeout(() => loaderEl.classList.add("hide"), 350);
 
   // --- input: wheel ---------------------------------------------------------
   window.addEventListener(
