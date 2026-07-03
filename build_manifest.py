@@ -190,6 +190,8 @@ def main():
                     copied_full += 1
 
     manifest = {"count": len(items), "items": items}
+    items.sort(key=lambda it: int(it.get("id") or 0))
+    manifest["items"] = items
     with open(MANIFEST_PATH, "w", encoding="utf-8") as fh:
         json.dump(manifest, fh, ensure_ascii=False, indent=0)
 
