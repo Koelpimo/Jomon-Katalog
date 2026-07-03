@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { firstCatalogIndex } from "./filters.js";
+import { filterItems } from "./filters.js";
 import {
   getCachedImage,
   requestThumb,
@@ -71,8 +71,8 @@ export class Gallery {
     this.canvas = canvas;
     this.allItems = items;
     this.filterId = filterId;
-    this._order = items.map((_, i) => i);
-    this.N = items.length;
+    this.items = filterItems(items, filterId);
+    this.N = this.items.length;
 
     this.scroll = 0;
     this.target = 0;
@@ -219,14 +219,9 @@ export class Gallery {
     this._cacheOrder = [];
   }
 
-  _catalogIndex(seq) {
-    if (!this.N) return -1;
-    const pos = ((seq % this.N) + this.N) % this.N;
-    return this._order[pos];
-  }
-
   _listIndexForSeq(seq) {
-    return this._catalogIndex(seq);
+    if (!this.N) return -1;
+    return ((seq % this.N) + this.N) % this.N;
   }
 
   /** Linear: jedes Scroll-Increment = nächstes Katalogobjekt, keine Wiederholung bis N. */
@@ -250,9 +245,9 @@ export class Gallery {
     for (let i = POOL; i < POOL + fwd; i++) ahead.push(base + i);
     for (let i = 1; i <= back; i++) behind.push(base - i);
 
-    prefetchListIndices(this.allItems, visible, 0);
-    prefetchListIndices(this.allItems, ahead, 1);
-    prefetchListIndices(this.allItems, behind, 2);
+    prefetchListIndices(this.items, visible, 0);
+    prefetchListIndices(this.items, ahead, 1);
+    prefetchListIndices(this.items, behind, 2);
   }
 
   _clearPlane(plane) {
@@ -274,8 +269,8 @@ export class Gallery {
       return;
     }
 
-    const listIndex = this._catalogIndex(seq);
-    const item = this.allItems[listIndex];
+    const listIndex = this._listIndexForSeq(seq);
+    const item = this.items[listIndex];
     if (!item) {
       this._clearPlane(plane);
       return;
@@ -484,36 +479,27 @@ export class Gallery {
       mode,
       phase: "out",
       t: 0,
-      outDur: mode === "shuffle" ? 0.5 : 0.38,
-      inDur: mode === "shuffle" ? 0.72 : 0.55,
+      outDur: mode === "shuffle" ? 0.5 : 0.34,
+      inDur: mode === "shuffle" ? 0.72 : 0.52,
     };
 
-    return this.N;
+    return filterItems(this.allItems, filterId).length;
   }
 
   _applyFilterNow(filterId) {
     this.filterId = filterId;
+    this.items = filterItems(this.allItems, filterId);
+    this.N = this.items.length;
     this._filterEpoch += 1;
-
-    if (filterId === "random") {
-      this._order = this.allItems.map((_, i) => i);
-      for (let i = this._order.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [this._order[i], this._order[j]] = [this._order[j], this._order[i]];
-      }
-      this.scroll = 0;
-      this.target = 0;
-    } else {
-      const jump = firstCatalogIndex(this.allItems, filterId);
-      this.scroll = jump;
-      this.target = jump;
-    }
-
-    this.velocity = 0;
+    this._clearTextureCache();
 
     for (const plane of this.planes) this._clearPlane(plane);
+
+    this.scroll = 0;
+    this.target = 0;
+    this.velocity = 0;
     this._refreshAllPlanes();
-    this._prefetchNear(this.scroll, 0);
+    this._prefetchNear(0, 0);
     return this.N;
   }
 
