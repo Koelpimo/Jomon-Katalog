@@ -80,18 +80,20 @@ async function boot() {
     dismissHint();
   });
 
+  // --- preload the first handful of thumbnails for a clean reveal ----------
   setLoaderProgress(32, "Bilder werden geladen…");
-  const warmupCount = Math.min(14, items.length);
+  const warmup = items.slice(0, Math.min(14, items.length));
   let done = 0;
   await Promise.all(
-    items.slice(0, warmupCount).map(
+    warmup.map(
       (it) =>
         new Promise((resolve) => {
           const img = new Image();
           img.crossOrigin = "anonymous";
           img.onload = img.onerror = () => {
             done++;
-            setLoaderProgress(32 + Math.round((done / warmupCount) * 68));
+            const loadPct = 32 + Math.round((done / warmup.length) * 68);
+            setLoaderProgress(loadPct);
             resolve();
           };
           img.src = it.thumb;

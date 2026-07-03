@@ -30,25 +30,3 @@ export function filterItems(allItems, filterId) {
 export function countForFilter(allItems, filterId) {
   return filterItems(allItems, filterId).length;
 }
-
-export function firstCatalogIndex(allItems, filterId) {
-  if (filterId === "random") return 0;
-  const def = FILTERS.find((f) => f.id === filterId);
-  if (!def?.categories) return 0;
-  const allowed = new Set(def.categories);
-  const idx = allItems.findIndex((item) =>
-    allowed.has(normalizeCategory(item.category))
-  );
-  return idx >= 0 ? idx : 0;
-}
-
-export function firstCatalogIndex(allItems, filterId) {
-  if (filterId === "random") return 0;
-  const def = FILTERS.find((f) => f.id === filterId);
-  if (!def?.categories) return 0;
-  const allowed = new Set(def.categories);
-  const idx = allItems.findIndex((item) =>
-    allowed.has(normalizeCategory(item.category))
-  );
-  return idx >= 0 ? idx : 0;
-}
