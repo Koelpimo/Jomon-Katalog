@@ -81,7 +81,7 @@ export class Gallery {
 
     this._textures = new Map();
     this._texOrder = [];
-    this._texLimit = 160;
+    this._texLimit = 280;
     this._prefetchAt = 0;
     this._filterEpoch = 0;
     this._fx = null;
@@ -141,14 +141,15 @@ export class Gallery {
         listIndex: -1,
         filterEpoch: -1,
         stem: null,
+        texStem: null,
         item: null,
         aspect: 1,
-        appear: 0,
+        ready: false,
+        assignId: 0,
         baseHeight: BASE_HEIGHT,
         offsetX: 0,
         offsetY: 0,
         roll: 0,
-        loadingStem: null,
       };
       mesh.userData.plane = plane;
       this.planes.push(plane);
@@ -156,21 +157,28 @@ export class Gallery {
     }
   }
 
+  _textureInUse(texture) {
+    for (const plane of this.planes) {
+      if (plane.mesh.material.map === texture) return true;
+    }
+    return false;
+  }
+
   _touchTex(stem) {
     const i = this._texOrder.indexOf(stem);
     if (i !== -1) this._texOrder.splice(i, 1);
     this._texOrder.push(stem);
+
     while (this._texOrder.length > this._texLimit) {
       const evict = this._texOrder.shift();
-      if (this.planes.some((p) => p.stem === evict)) {
-        this._texOrder.push(evict);
-        break;
-      }
       const entry = this._textures.get(evict);
-      if (entry) {
-        entry.texture.dispose();
-        this._textures.delete(evict);
+      if (!entry) continue;
+      if (this.planes.some((p) => p.texStem === evict) || this._textureInUse(entry.texture)) {
+        this._texOrder.push(evict);
+        continue;
       }
+      entry.texture.dispose();
+      this._textures.delete(evict);
     }
   }
 
@@ -228,22 +236,26 @@ export class Gallery {
     plane.listIndex = -1;
     plane.filterEpoch = -1;
     plane.stem = null;
+    plane.texStem = null;
     plane.item = null;
-    plane.loadingStem = null;
-    plane.appear = 0;
+    plane.ready = false;
+    plane.assignId++;
     plane.mesh.visible = false;
     plane.mesh.material.opacity = 0;
     plane.mesh.material.map = null;
     plane.mesh.material.needsUpdate = true;
   }
 
-  _applyTexture(plane, entry, instant = false) {
+  _applyTexture(plane, stem, entry) {
+    const mat = plane.mesh.material;
+    if (mat.map !== entry.texture) {
+      mat.map = entry.texture;
+      mat.needsUpdate = true;
+    }
     plane.aspect = entry.aspect;
-    plane.mesh.material.map = entry.texture;
-    plane.mesh.material.needsUpdate = true;
+    plane.texStem = stem;
+    plane.ready = true;
     plane.mesh.visible = true;
-    plane.appear = instant ? 1 : Math.min(plane.appear, 0.35);
-    plane.loadingStem = null;
   }
 
   _assignPlane(plane, seq) {
@@ -260,22 +272,21 @@ export class Gallery {
     }
 
     if (
-      plane.seq === seq &&
       plane.listIndex === listIndex &&
       plane.filterEpoch === this._filterEpoch &&
       plane.stem === item.stem &&
+      plane.ready &&
       plane.mesh.material.map
     ) {
+      plane.seq = seq;
       return;
     }
 
-    const hadMap = !!plane.mesh.material.map;
     plane.seq = seq;
     plane.listIndex = listIndex;
     plane.filterEpoch = this._filterEpoch;
     plane.item = item;
     plane.stem = item.stem;
-    plane.loadingStem = item.stem;
 
     const s = listIndex + 1 + this._filterEpoch * 10000;
     const pos = layoutOffsets(s);
@@ -284,53 +295,55 @@ export class Gallery {
     plane.baseHeight = BASE_HEIGHT * (0.92 + rand(s * 5.29) * 0.45);
     plane.roll = (rand(s * 7.13) - 0.5) * 0.09;
 
-    if (!hadMap) {
-      plane.appear = 0;
-      plane.mesh.material.opacity = 0;
-      plane.mesh.visible = false;
-    }
-
     const stem = item.stem;
     const url = item.thumb;
+    const assignId = ++plane.assignId;
 
     const cached = this._textures.get(stem);
     if (cached) {
-      this._applyTexture(plane, cached, true);
+      this._applyTexture(plane, stem, cached);
+      return;
+    }
+
+    const img = getCachedImage(stem);
+    if (img) {
+      const entry = this._textureFromImage(img);
+      this._textures.set(stem, entry);
+      this._touchTex(stem);
+      this._applyTexture(plane, stem, entry);
       return;
     }
 
     this._getTextureEntry(stem, url, 0).then((entry) => {
-      if (!entry || plane.loadingStem !== stem) return;
-      this._applyTexture(plane, entry, hadMap || getCachedImage(stem) !== null);
+      if (!entry || plane.assignId !== assignId || plane.stem !== stem) return;
+      this._applyTexture(plane, stem, entry);
     });
   }
 
   _refreshAllPlanes() {
     for (const plane of this.planes) {
-      this._assignPlane(plane, this._seqForPlane(plane));
+      this._assignPlane(plane, this._seqForPlane(plane, this.scroll));
     }
   }
 
   _prefetch(scroll, velocity) {
-    const ahead = indicesAround(this.items, scroll, POOL + 24, velocity);
+    const ahead = indicesAround(this.items, scroll, POOL + 30, velocity);
     prefetchIndices(this.items, ahead, 0);
-    const behind = indicesAround(this.items, scroll - 6, 12, -1);
-    prefetchIndices(this.items, behind, 2);
   }
 
   update() {
     const dt = Math.min(this._clock.getDelta(), 0.05);
 
     this.target += this.velocity;
-    this.velocity *= 0.9;
+    this.velocity = THREE.MathUtils.clamp(this.velocity * 0.9, -10, 10);
     if (Math.abs(this.velocity) < 0.00001) this.velocity = 0;
-    this.scroll += (this.target - this.scroll) * Math.min(1, dt * 8);
+    this.scroll += (this.target - this.scroll) * Math.min(1, dt * 10);
 
     const fxState = this._advanceTransition(dt);
     const effScroll = this.scroll + fxState.scrollOffset;
 
     this._prefetchAt += dt;
-    if (this._prefetchAt >= 0.08) {
+    if (this._prefetchAt >= 0.06) {
       this._prefetchAt = 0;
       this._prefetch(effScroll, this.velocity);
     }
@@ -347,12 +360,15 @@ export class Gallery {
 
     for (const plane of this.planes) {
       const seq = this._seqForPlane(plane, effScroll);
+      const listIndex = this._listIndex(seq);
 
       if (
-        seq !== plane.seq ||
+        listIndex !== plane.listIndex ||
         plane.filterEpoch !== this._filterEpoch
       ) {
         this._assignPlane(plane, seq);
+      } else {
+        plane.seq = seq;
       }
 
       const term = plane.index * SPACING - effScroll * SPACING;
@@ -378,7 +394,7 @@ export class Gallery {
       mesh.scale.set(h * plane.aspect, h, 1);
       mesh.rotation.z = roll;
 
-      if (!mesh.visible || !mesh.material.map) continue;
+      if (!plane.ready || !mesh.material.map) continue;
 
       if (inTransition) {
         mesh.material.opacity = fxState.fade;
@@ -386,10 +402,9 @@ export class Gallery {
       }
 
       const distFront = THREE.MathUtils.clamp(Z_FRONT - z, 0, TOTAL);
-      const exitFade = THREE.MathUtils.smoothstep(distFront, 0.8, 5.5);
-      const enterFade = THREE.MathUtils.clamp(plane.appear + dt * 6, 0, 1);
-      plane.appear = enterFade;
-      mesh.material.opacity = enterFade * exitFade;
+      const alpha = THREE.MathUtils.smoothstep(distFront, 0.5, 6);
+      mesh.material.opacity = alpha;
+      mesh.visible = true;
     }
 
     this.renderer.render(this.scene, this.camera);
@@ -460,8 +475,8 @@ export class Gallery {
   }
 
   addScroll(delta) {
-    this.velocity += delta * 0.2;
-    this.target += delta * 0.35;
+    this.velocity += delta * 0.18;
+    this.target += delta * 0.3;
   }
 
   setFilter(filterId) {
@@ -494,7 +509,7 @@ export class Gallery {
     this.target = 0;
     this.velocity = 0;
 
-    warmWindow(this.items, POOL + 20, 2000).then(() => {
+    warmWindow(this.items, POOL + 24, 2500).then(() => {
       this._refreshAllPlanes();
     });
     this._refreshAllPlanes();

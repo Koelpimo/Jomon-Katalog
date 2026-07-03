@@ -1,10 +1,10 @@
 /**
- * Thumbnail loader — HTMLImageElement only (correct orientation with Three.js).
+ * Thumbnail loader — HTMLImageElement (correct orientation with Three.js flipY).
  * Priority queue, deduplicated requests, bounded RAM cache.
  */
 
-const MAX_ACTIVE = 12;
-const MAX_RAM = 220;
+const MAX_ACTIVE = 16;
+const MAX_RAM = 400;
 
 const images = new Map();
 const order = [];
@@ -13,7 +13,14 @@ const queue = [];
 let active = 0;
 
 function remember(stem, img) {
-  if (images.has(stem)) return;
+  if (images.has(stem)) {
+    const i = order.indexOf(stem);
+    if (i !== -1) {
+      order.splice(i, 1);
+      order.push(stem);
+    }
+    return;
+  }
   images.set(stem, img);
   order.push(stem);
   while (order.length > MAX_RAM) {
@@ -40,8 +47,9 @@ function loadImage(url) {
 }
 
 async function runJob(job) {
-  if (images.has(job.stem)) {
-    job.resolve(images.get(job.stem));
+  const hit = getCachedImage(job.stem);
+  if (hit) {
+    job.resolve(hit);
     return;
   }
   const img = await loadImage(job.url);
@@ -111,22 +119,26 @@ export async function warmWindow(items, count = 50, maxMs = 4000, onProgress) {
 export function prefetchIndices(items, indices, priority = 1) {
   if (!items.length) return;
   const n = items.length;
+  const seen = new Set();
   for (const raw of indices) {
     const idx = ((raw % n) + n) % n;
+    if (seen.has(idx)) continue;
+    seen.add(idx);
     const item = items[idx];
     if (item) requestThumb(item.stem, item.thumb, priority);
   }
 }
 
-/** Build index list for scroll position + lookahead. */
+/** Build index list for scroll position + lookahead in both directions. */
 export function indicesAround(items, scroll, count, velocity = 0) {
   const base = Math.floor(scroll);
-  const extra = Math.min(50, Math.ceil(Math.abs(velocity) * 120));
-  const total = count + extra;
+  const extra = Math.min(45, Math.ceil(Math.abs(velocity) * 90));
+  const forward = count + extra;
+  const backward = Math.min(18, 6 + Math.ceil(extra * 0.4));
   const out = [];
-  const dir = velocity >= 0 ? 1 : -1;
-  for (let i = 0; i < total; i++) {
-    out.push(base + i * dir);
-  }
+
+  for (let i = 0; i < forward; i++) out.push(base + i);
+  for (let i = 1; i <= backward; i++) out.push(base - i);
+
   return out;
 }
