@@ -66,17 +66,27 @@ async function boot() {
     if (e.key === "Escape" && infoModal.classList.contains("open")) closeInfo();
   });
 
+  function setActiveFilter(filterId, { pulse = false } = {}) {
+    filtersEl.querySelectorAll(".hud__filter").forEach((el) => {
+      const active = el.dataset.filter === filterId;
+      el.classList.toggle("is-active", active);
+      if (active && pulse) {
+        el.classList.remove("is-pulse");
+        void el.offsetWidth;
+        el.classList.add("is-pulse");
+      }
+    });
+  }
+
+  gallery.onFilterChange = (filterId, opts) => setActiveFilter(filterId, opts);
+
   filtersEl.addEventListener("click", (e) => {
     const btn = e.target.closest("[data-filter]");
     if (!btn) return;
     e.preventDefault();
     e.stopPropagation();
 
-    const filterId = btn.dataset.filter;
-    gallery.setFilter(filterId);
-    filtersEl.querySelectorAll(".hud__filter").forEach((el) => {
-      el.classList.toggle("is-active", el === btn);
-    });
+    gallery.setFilter(btn.dataset.filter);
     dismissHint();
   });
 

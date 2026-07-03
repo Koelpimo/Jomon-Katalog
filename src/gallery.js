@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { firstCatalogIndex } from "./filters.js";
+import { firstCatalogIndex, filterIdForItem } from "./filters.js";
 
 const BG_COLOR = 0xefece5;
 
@@ -92,7 +92,12 @@ export class Gallery {
     this._cacheOrder = [];            // LRU order of stems
     this._cacheLimit = 90;
     this._filterEpoch = 0;
-    this._fx = null;   // active filter transition, or null
+    this._fx = null;
+    this._randomMode = false;
+    this._detectedFilter = filterId;
+    this._categoryPulse = 0;
+    this._baseFov = 52;
+    this.onFilterChange = null;
 
     this._initThree();
     this._buildPool();
@@ -218,6 +223,31 @@ export class Gallery {
     return this._order[pos];
   }
 
+  _detectedFilterAt(scroll) {
+    if (this._randomMode) return "random";
+    const idx = this._listIndexForSeq(Math.floor(scroll) + Math.floor(POOL * 0.45));
+    return filterIdForItem(this.allItems[idx]);
+  }
+
+  _triggerCategoryPulse() {
+    this._categoryPulse = 1;
+  }
+
+  _updateDetectedFilter(scroll) {
+    if (this._fx) return;
+    const detected = this._detectedFilterAt(scroll);
+    if (detected === this._detectedFilter) return;
+    this._detectedFilter = detected;
+    this.filterId = detected;
+    this._triggerCategoryPulse();
+    this.onFilterChange?.(detected, { pulse: true });
+  }
+
+  _categoryScale() {
+    if (this._categoryPulse <= 0) return 1;
+    return 1 + Math.sin(this._categoryPulse * Math.PI) * 0.16;
+  }
+
   _seqForPlane(plane, scroll = this.scroll) {
     const term = plane.index * SPACING - scroll * SPACING;
     const lap = Math.floor(term / TOTAL);
@@ -309,6 +339,18 @@ export class Gallery {
     const fxState = this._advanceTransition(dt);
     const effScroll = this.scroll + fxState.scrollOffset;
 
+    if (this._categoryPulse > 0) {
+      this._categoryPulse = Math.max(0, this._categoryPulse - dt * 1.8);
+    }
+    this._updateDetectedFilter(effScroll);
+
+    const catScale = this._categoryScale() * (fxState.zoomScale || 1);
+    const fov = this._baseFov - (catScale - 1) * 28;
+    if (Math.abs(this.camera.fov - fov) > 0.01) {
+      this.camera.fov = fov;
+      this.camera.updateProjectionMatrix();
+    }
+
     // subtle camera parallax toward the pointer
     this.camTilt.x += (this.pointer.y * 0.05 - this.camTilt.x) * Math.min(1, dt * 4);
     this.camTilt.y += (this.pointer.x * 0.07 - this.camTilt.y) * Math.min(1, dt * 4);
@@ -353,7 +395,7 @@ export class Gallery {
 
       const h = plane.baseHeight;
       const w = h * plane.aspect;
-      mesh.scale.set(w, h, 1);
+      mesh.scale.set(w * catScale, h * catScale, 1);
       mesh.rotation.z = roll;
 
       // fade in as it emerges; fade out just before it slips behind the camera
@@ -370,7 +412,7 @@ export class Gallery {
 
   // advance the active transition and return its visual contribution
   _advanceTransition(dt) {
-    if (!this._fx) return { scrollOffset: 0, fade: 1, shuffle: 0, camRoll: 0 };
+    if (!this._fx) return { scrollOffset: 0, fade: 1, shuffle: 0, camRoll: 0, zoomScale: 1 };
 
     const fx = this._fx;
     fx.t += dt / (fx.phase === "out" ? fx.outDur : fx.inDur);
@@ -380,6 +422,7 @@ export class Gallery {
     let fade = 1;
     let shuffle = 0;
     let camRoll = 0;
+    let zoomScale = 1;
 
     if (fx.phase === "out") {
       const e = easeInCubic(p);
@@ -389,7 +432,8 @@ export class Gallery {
         scrollOffset = e * 1.5;
         camRoll = e * 0.08;
       } else {
-        scrollOffset = e * ZOOM_RUSH;   // rush forward, "into" the objects
+        scrollOffset = e * ZOOM_RUSH;
+        zoomScale = 1 + e * 0.2;
       }
       if (p >= 1) {
         this._applyFilterNow(fx.filterId);
@@ -404,12 +448,13 @@ export class Gallery {
         scrollOffset = -(1 - e) * 2.5;
         camRoll = (1 - e) * -0.06;
       } else {
-        scrollOffset = -(1 - e) * ZOOM_FAR;  // come rushing back from far
+        scrollOffset = -(1 - e) * ZOOM_FAR;
+        zoomScale = 1 + (1 - e) * 0.12;
       }
       if (p >= 1) this._fx = null;
     }
 
-    return { scrollOffset, fade, shuffle, camRoll };
+    return { scrollOffset, fade, shuffle, camRoll, zoomScale };
   }
 
   // ---- interaction ----------------------------------------------------------
@@ -445,21 +490,24 @@ export class Gallery {
   setFilter(filterId) {
     if (this.filterId === filterId && filterId !== "random") return this.N;
 
+    this._randomMode = filterId === "random";
     const mode = filterId === "random" ? "shuffle" : "zoom";
     this._fx = {
       filterId,
       mode,
       phase: "out",
       t: 0,
-      outDur: mode === "shuffle" ? 0.5 : 0.34,
-      inDur: mode === "shuffle" ? 0.72 : 0.52,
+      outDur: mode === "shuffle" ? 0.5 : 0.4,
+      inDur: mode === "shuffle" ? 0.72 : 0.58,
     };
 
+    this.onFilterChange?.(filterId, { pulse: true });
     return this.N;
   }
 
   _applyFilterNow(filterId) {
     this.filterId = filterId;
+    this._detectedFilter = filterId;
     this._filterEpoch += 1;
 
     if (filterId === "random") {

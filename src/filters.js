@@ -42,3 +42,14 @@ export function firstCatalogIndex(allItems, filterId) {
   );
   return idx >= 0 ? idx : 0;
 }
+
+/** Kategorie eines Objekts → Filter-ID für die HUD. */
+export function filterIdForItem(item) {
+  if (!item) return "figuren";
+  const cat = normalizeCategory(item.category);
+  for (const f of FILTERS) {
+    if (f.id === "random" || !f.categories) continue;
+    if (f.categories.includes(cat)) return f.id;
+  }
+  return "figuren";
+}
