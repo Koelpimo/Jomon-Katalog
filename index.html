@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>Jōmon Katalog</title>
-  <meta name="description" content="Eine Reise durch den Jōmon-Katalog – scrolle in den Raum hinein." />
+  <title>Jomon-Katalog</title>
+  <meta name="description" content="Katalog über Relikte aus der Jomon-Zeit – Figuren, Gefäße und Artefakte." />
   <link rel="icon" href="./favicon.ico" sizes="any" />
   <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32x32.png" />
   <link rel="icon" type="image/png" sizes="16x16" href="./favicon-16x16.png" />
@@ -25,7 +25,7 @@
   <!-- Loading -->
   <div id="loader" class="loader">
     <div class="loader__inner">
-      <div class="loader__mark">Jōmon Katalog</div>
+      <div class="loader__mark">Jomon-Katalog</div>
       <div class="loader__progress">
         <div class="loader__bar"><span id="loaderBar"></span></div>
         <div class="loader__pct" id="loaderPct">0%</div>
@@ -37,7 +37,7 @@
   <!-- Header -->
   <header class="hud hud--top">
     <div class="hud__left">
-      <div class="hud__title">Objekte aus der Jōmon Zeit</div>
+      <div class="hud__title">Objekte aus der Jomon-Zeit</div>
       <nav class="hud__filters" id="filters" aria-label="Katalogfilter">
         <button type="button" class="hud__filter is-active" data-filter="figuren">
           <svg class="hud__filter-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5c1.2 0 2.2 1 2.2 2.2 0 1-.6 1.8-1.4 2.2 1.6.5 2.8 2 2.8 3.8V14H4.4V9.7c0-1.8 1.2-3.3 2.8-3.8-.8-.4-1.4-1.2-1.4-2.2 0-1.2 1-2.2 2.2-2.2z"/></svg>
@@ -45,7 +45,7 @@
         </button>
         <button type="button" class="hud__filter" data-filter="vasen">
           <svg class="hud__filter-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 2h6l-.5 3h-5L5 2zm1.2 5h3.6l1.2 7H5l1.2-7z"/></svg>
-          <span>02 Vasen</span>
+          <span>02 Gefäße</span>
         </button>
         <button type="button" class="hud__filter" data-filter="artefakte">
           <svg class="hud__filter-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 12 7 4l2 3 4-1-3 10H3z"/></svg>
@@ -70,18 +70,10 @@
   <div id="infoModal" class="info" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="infoTitle">
     <div class="info__panel">
       <button class="info__close" id="infoClose" aria-label="Schließen">&times;</button>
-      <h2 class="info__title" id="infoTitle">Über diese Website</h2>
-      <p class="info__lead">Ein digitaler Streifzug durch die Formenwelt der japanischen Jōmon-Zeit (ca. 14.000–300 v. Chr.).</p>
+      <h2 class="info__title" id="infoTitle">Jomon-Katalog</h2>
       <div class="info__body">
-        <p>Die Objekte schweben frei in einem dreidimensionalen Raum. Beim <strong>Scrollen</strong> bewegst du dich in die Tiefe hinein – neue Stücke tauchen aus der Ferne auf, wachsen heran und ziehen an dir vorbei.</p>
-        <p>Über die Kapitel links wählst du eine Kategorie:</p>
-        <ul>
-          <li><strong>01 Figuren</strong> – Tonfiguren (Dogū) und Masken</li>
-          <li><strong>02 Vasen</strong> – Keramik und Gefäße</li>
-          <li><strong>03 Artefakte</strong> – Werkzeuge, Schmuck und Alltagsobjekte</li>
-          <li><strong>04 Zufall</strong> – alle Kategorien bunt gemischt</li>
-        </ul>
-        <p>Ein <strong>Klick</strong> auf ein Objekt öffnet es in hoher Auflösung mit den zugehörigen Angaben aus dem Katalog.</p>
+        <p>Ein Katalog über Relikte aus der Jomon-Zeit. Figuren, Gefäße und weitere Artefakte aus einer Zeit bis zu 14 000 Jahre vor Christus.</p>
+        <p>Zusammengetragen von Ausgrabungsstätten in ganz Japan, geben die Objekte Einblick in die Materialien, Techniken und Formen einer frühen japanischen Kultur.</p>
       </div>
       <div class="info__hint">
         <span>Scrollen / Ziehen — bewegen</span>
@@ -94,7 +86,7 @@
   <!-- Scroll hint -->
   <div id="hint" class="hint">
     <div class="hint__mouse"><span></span></div>
-    <div class="hint__text">Scrollen, um in den Raum einzutauchen</div>
+    <div class="hint__text">Scrollen</div>
   </div>
 
   <!-- Lightbox -->
