@@ -4,6 +4,7 @@ import {
   getCachedImage,
   requestThumb,
   prefetchCatalogIndices,
+  prefetchSeqWindow,
 } from "./thumbLoader.js";
 
 const BG_COLOR = 0xefece5;
@@ -19,8 +20,8 @@ const BASE_HEIGHT = 4.0;
 const ZOOM_RUSH = 5.2;
 const ZOOM_FAR = 4.2;
 
-const LOOK_AHEAD = 20;
-const LOOK_BEHIND = 12;
+const LOOK_AHEAD = 35;
+const LOOK_BEHIND = 20;
 
 function rand(seed) {
   const x = Math.sin(seed * 127.1 + 311.7) * 43758.5453;
@@ -78,8 +79,7 @@ export class Gallery {
 
     this._textureCache = new Map();
     this._cacheOrder = [];
-    this._cacheLimit = 150;
-    this._prefetchAt = 0;
+    this._cacheLimit = 180;
     this._filterEpoch = 0;
     this._fx = null;
 
@@ -181,29 +181,18 @@ export class Gallery {
     return { texture, aspect };
   }
 
-  _getEntry(stem, url, priority) {
-    const cached = this._textureCache.get(stem);
-    if (cached) {
+  _resolveEntrySync(stem) {
+    let entry = this._textureCache.get(stem);
+    if (entry) {
       this._touchCache(stem);
-      return Promise.resolve(cached);
+      return entry;
     }
     const img = getCachedImage(stem);
-    if (img) {
-      const entry = this._entryFromImage(img);
-      this._textureCache.set(stem, entry);
-      this._touchCache(stem);
-      return Promise.resolve(entry);
-    }
-    return requestThumb(stem, url, priority).then((loaded) => {
-      if (!loaded) return null;
-      let entry = this._textureCache.get(stem);
-      if (!entry) {
-        entry = this._entryFromImage(loaded);
-        this._textureCache.set(stem, entry);
-        this._touchCache(stem);
-      }
-      return entry;
-    });
+    if (!img) return null;
+    entry = this._entryFromImage(img);
+    this._textureCache.set(stem, entry);
+    this._touchCache(stem);
+    return entry;
   }
 
   _seqForPlane(plane, scroll) {
@@ -218,9 +207,9 @@ export class Gallery {
 
   _indicesForScroll(scroll, velocity) {
     const base = Math.floor(scroll);
-    const extra = Math.min(24, Math.ceil(Math.abs(velocity) * 50));
-    const fwd = (velocity >= 0 ? LOOK_AHEAD : LOOK_BEHIND) + extra;
-    const back = (velocity >= 0 ? LOOK_BEHIND : LOOK_AHEAD) + extra;
+    const boost = Math.min(35, Math.ceil(Math.abs(velocity) * 70));
+    const fwd = LOOK_AHEAD + boost;
+    const back = LOOK_BEHIND + boost;
 
     const visible = [];
     const ahead = [];
@@ -238,7 +227,18 @@ export class Gallery {
     const { visible, ahead, behind } = this._indicesForScroll(scroll, velocity);
     prefetchCatalogIndices(this.allItems, visible, 0);
     prefetchCatalogIndices(this.allItems, ahead, 1);
-    prefetchCatalogIndices(this.allItems, behind, 2);
+    prefetchCatalogIndices(this.allItems, behind, 1);
+    if (velocity < -0.02) {
+      prefetchCatalogIndices(this.allItems, behind, 0);
+    } else if (velocity > 0.02) {
+      prefetchCatalogIndices(this.allItems, ahead, 0);
+    }
+  }
+
+  prime(scroll = 0) {
+    prefetchSeqWindow(this.allItems, this._order, Math.floor(scroll), POOL + LOOK_AHEAD, 0);
+    this._prefetchNear(scroll, 0);
+    this._refreshAllPlanes();
   }
 
   _clearPlane(plane) {
@@ -255,7 +255,7 @@ export class Gallery {
     plane.mesh.visible = false;
   }
 
-  _applyEntry(plane, entry, hadMap) {
+  _applyEntry(plane, entry) {
     const mat = plane.mesh.material;
     if (mat.map !== entry.texture) {
       mat.map = entry.texture;
@@ -263,12 +263,6 @@ export class Gallery {
     }
     plane.aspect = entry.aspect;
     plane.mesh.visible = true;
-    if (hadMap) {
-      plane.appear = 1;
-    } else if (this._fx) {
-      plane.appear = 1;
-      mat.opacity = this._fx.phase === "in" ? 0.15 : 1;
-    }
   }
 
   _assignPlane(plane, seq) {
@@ -308,18 +302,28 @@ export class Gallery {
     plane.baseHeight = BASE_HEIGHT * (0.92 + rand(s * 5.29) * 0.45);
     plane.roll = (rand(s * 7.13) - 0.5) * 0.09;
 
-    if (!hadMap) {
-      plane.appear = 0;
-      plane.mesh.material.opacity = 0;
-      plane.mesh.visible = false;
+    if (!hadMap) plane.appear = 0;
+
+    const stem = item.stem;
+    const entry = this._resolveEntrySync(stem);
+    if (entry) {
+      this._applyEntry(plane, entry);
+      if (this._fx) plane.appear = 1;
+      return;
     }
 
     const assignId = ++plane.assignId;
-    const stem = item.stem;
-
-    this._getEntry(stem, item.thumb, 0).then((entry) => {
-      if (!entry || plane.assignId !== assignId || plane.stem !== stem) return;
-      this._applyEntry(plane, entry, hadMap);
+    requestThumb(stem, item.thumb, 0).then((img) => {
+      if (!img || plane.assignId !== assignId || plane.stem !== stem) return;
+      let loaded = this._textureCache.get(stem);
+      if (!loaded) {
+        loaded = this._entryFromImage(img);
+        this._textureCache.set(stem, loaded);
+        this._touchCache(stem);
+      }
+      this._applyEntry(plane, loaded);
+      if (!hadMap) plane.appear = 0;
+      if (this._fx) plane.appear = 1;
     });
   }
 
@@ -340,11 +344,7 @@ export class Gallery {
     const fxState = this._advanceTransition(dt);
     const effScroll = this.scroll + fxState.scrollOffset;
 
-    this._prefetchAt += dt;
-    if (this._prefetchAt >= 0.06) {
-      this._prefetchAt = 0;
-      this._prefetchNear(effScroll, this.velocity);
-    }
+    this._prefetchNear(effScroll, this.velocity);
 
     this.camTilt.x += (this.pointer.y * 0.05 - this.camTilt.x) * Math.min(1, dt * 4);
     this.camTilt.y += (this.pointer.x * 0.07 - this.camTilt.y) * Math.min(1, dt * 4);
@@ -476,6 +476,7 @@ export class Gallery {
   addScroll(delta) {
     this.velocity += delta * 0.18;
     this.target += delta * 0.3;
+    this._prefetchNear(this.target, this.velocity);
   }
 
   setFilter(filterId) {
@@ -516,8 +517,7 @@ export class Gallery {
     this.velocity = 0;
 
     for (const plane of this.planes) this._clearPlane(plane);
-    this._refreshAllPlanes();
-    this._prefetchNear(this.scroll, 0);
+    this.prime(this.scroll);
 
     return this.N;
   }

@@ -1,7 +1,7 @@
-/** On-demand thumbnails mit Priorität: 0=sichtbar, 1=voraus, 2=zurück. */
+/** Thumbnail-Loader mit Prioritäts-Warteschlange. */
 
-const MAX_ACTIVE = 12;
-const MAX_RAM = 200;
+const MAX_ACTIVE = 18;
+const MAX_RAM = 280;
 
 const images = new Map();
 const order = [];
@@ -43,31 +43,40 @@ function enqueue(job) {
   else queue.splice(at, 0, job);
 }
 
+function promote(stem, priority) {
+  const idx = queue.findIndex((j) => j.stem === stem);
+  if (idx === -1) return;
+  const job = queue.splice(idx, 1)[0];
+  job.priority = Math.min(job.priority, priority);
+  enqueue(job);
+}
+
 function pump() {
   while (active < MAX_ACTIVE && queue.length) {
     const job = queue.shift();
     active++;
     (async () => {
       const hit = getCachedImage(job.stem);
-      if (hit) job.resolve(hit);
-      else {
-        const img = await loadImage(job.url);
-        if (img) remember(job.stem, img);
-        job.resolve(img);
+      if (hit) {
+        job.resolve(hit);
+        return;
       }
+      const img = await loadImage(job.url);
+      if (img) remember(job.stem, img);
+      job.resolve(img);
     })().finally(() => { active--; pump(); });
   }
 }
 
 export function requestThumb(stem, url, priority = 1) {
   if (!stem || !url) return Promise.resolve(null);
+
   const hit = getCachedImage(stem);
   if (hit) return Promise.resolve(hit);
 
   const pending = inflight.get(stem);
   if (pending) {
-    const job = queue.find((j) => j.stem === stem);
-    if (job && job.priority > priority) job.priority = priority;
+    promote(stem, priority);
     return pending;
   }
 
@@ -80,6 +89,7 @@ export function requestThumb(stem, url, priority = 1) {
   return promise;
 }
 
+/** Katalog-Indizes vorladen (direkt in allItems, nicht seq). */
 export function prefetchCatalogIndices(allItems, indices, priority = 1) {
   if (!allItems.length) return;
   const seen = new Set();
@@ -87,6 +97,18 @@ export function prefetchCatalogIndices(allItems, indices, priority = 1) {
     if (idx < 0 || idx >= allItems.length || seen.has(idx)) continue;
     seen.add(idx);
     const item = allItems[idx];
-    if (item) requestThumb(item.stem, item.thumb, priority);
+    if (item?.stem && item?.thumb) requestThumb(item.stem, item.thumb, priority);
   }
+}
+
+/** Fenster ab seq-Position vorladen (für Warmup). */
+export function prefetchSeqWindow(allItems, order, seqStart, count, priority = 0) {
+  const n = allItems.length;
+  if (!n) return;
+  const indices = [];
+  for (let i = 0; i < count; i++) {
+    const pos = ((seqStart + i) % n + n) % n;
+    indices.push(order[pos]);
+  }
+  prefetchCatalogIndices(allItems, indices, priority);
 }

@@ -83,7 +83,7 @@ async function boot() {
 
   // --- erste sichtbare Bilder vorladen ---------------------------------------
   setLoaderProgress(32, "Startbilder werden geladen…");
-  const warmup = items.slice(0, Math.min(30, items.length));
+  const warmup = items.slice(0, Math.min(50, items.length));
   if (warmup.length) {
     let done = 0;
     await Promise.all(
@@ -95,6 +95,8 @@ async function boot() {
       )
     );
   }
+
+  gallery.prime(0);
 
   setLoaderProgress(100, "Fertig");
   setTimeout(() => loaderEl.classList.add("hide"), 700);
