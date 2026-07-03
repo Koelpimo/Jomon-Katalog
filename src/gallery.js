@@ -1,23 +1,26 @@
 import * as THREE from "three";
 import { filterItems } from "./filters.js";
-import { getCachedThumb, requestThumb, prefetchRange, tickBackgroundPrefetch, startBackgroundPrefetch } from "./thumbLoader.js";
+import {
+  getCachedImage,
+  requestThumb,
+  prefetchIndices,
+  indicesAround,
+  warmWindow,
+} from "./thumbLoader.js";
 
 const BG_COLOR = 0xefece5;
 
-// --- corridor / pool configuration -----------------------------------------
-const POOL = 30;            // number of image planes living at once
-const SPACING = 6.2;        // distance between consecutive planes on the Z axis
+const POOL = 30;
+const SPACING = 6.2;
 const TOTAL = POOL * SPACING;
-const Z_FRONT = 6;          // where a plane recycles after passing the camera
+const Z_FRONT = 6;
 const FOG_NEAR = 14;
 const FOG_FAR = 122;
-const BASE_HEIGHT = 4.0;    // base world height of an image plane
+const BASE_HEIGHT = 4.0;
 
-// --- filter transition (zoom / shuffle) ------------------------------------
-const ZOOM_RUSH = 5.2;      // how far the scroll rushes forward while zooming out
-const ZOOM_FAR = 4.2;       // how far behind objects start when zooming back in
+const ZOOM_RUSH = 5.2;
+const ZOOM_FAR = 4.2;
 
-// deterministic pseudo-random from an integer seed -> [0,1)
 function rand(seed) {
   const x = Math.sin(seed * 127.1 + 311.7) * 43758.5453;
   return x - Math.floor(x);
@@ -26,28 +29,22 @@ function rand(seed) {
 function easeInCubic(t) { return t * t * t; }
 function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
 
-// Place each image in a wide field with a clear "hole" in the centre so
-// objects emerge from the periphery / corners rather than the middle.
 function layoutOffsets(seed) {
   const mode = rand(seed * 1.91);
 
   if (mode < 0.38) {
-    // anchored near screen corners / edges
     const quad = Math.floor(rand(seed * 2.44) * 4);
     const signX = quad % 2 === 0 ? -1 : 1;
     const signY = quad < 2 ? -1 : 1;
     const magX = 5.5 + rand(seed * 3.11) * 9;
     const magY = 4 + rand(seed * 4.22) * 7;
-    const jitterX = (rand(seed * 5.33) - 0.5) * 3;
-    const jitterY = (rand(seed * 6.44) - 0.5) * 2.5;
     return {
-      x: signX * magX + jitterX,
-      y: signY * magY + jitterY,
+      x: signX * magX + (rand(seed * 5.33) - 0.5) * 3,
+      y: signY * magY + (rand(seed * 6.44) - 0.5) * 2.5,
     };
   }
 
   if (mode < 0.72) {
-    // outer ring – minimum radius keeps the centre empty
     const ang = rand(seed * 2.13) * Math.PI * 2;
     const minR = 4.5;
     const maxR = 15;
@@ -59,15 +56,11 @@ function layoutOffsets(seed) {
     };
   }
 
-  // scattered field – wide box, centre repelled
   let x = (rand(seed * 9.37) - 0.5) * 28;
   let y = (rand(seed * 10.48) - 0.5) * 19;
-  const cx = Math.abs(x);
-  const cy = Math.abs(y);
-  if (cx < 4 && cy < 3) {
-    const push = rand(seed * 11.59) > 0.5 ? 1 : -1;
-    x += push * (5 - cx);
-    y += (rand(seed * 12.61) > 0.5 ? 1 : -1) * (4 - cy);
+  if (Math.abs(x) < 4 && Math.abs(y) < 3) {
+    x += (rand(seed * 11.59) > 0.5 ? 1 : -1) * (5 - Math.abs(x));
+    y += (rand(seed * 12.61) > 0.5 ? 1 : -1) * (4 - Math.abs(y));
   }
   return { x, y };
 }
@@ -80,29 +73,29 @@ export class Gallery {
     this.items = filterItems(items, filterId);
     this.N = this.items.length;
 
-    // start a few steps in so images are already in the sweet spot on first paint
     this.scroll = 0;
     this.target = 0;
     this.velocity = 0;
-    this.pointer = new THREE.Vector2(0, 0); // normalized -1..1
+    this.pointer = new THREE.Vector2(0, 0);
     this.camTilt = new THREE.Vector2(0, 0);
 
-    this._textureCache = new Map();   // stem -> { texture, aspect }
-    this._cacheOrder = [];            // LRU order of stems
-    this._cacheLimit = 120;
-    this._prefetchTimer = 0;
+    this._textures = new Map();
+    this._texOrder = [];
+    this._texLimit = 160;
+    this._prefetchAt = 0;
     this._filterEpoch = 0;
-    this._fx = null;   // active filter transition, or null
+    this._fx = null;
 
     this._initThree();
     this._buildPool();
 
     this.raycaster = new THREE.Raycaster();
     this._tmpNDC = new THREE.Vector2();
-
     this._clock = new THREE.Clock();
     this._onResize();
     window.addEventListener("resize", () => this._onResize());
+
+    this._refreshAllPlanes();
   }
 
   _initThree() {
@@ -132,11 +125,10 @@ export class Gallery {
     for (let i = 0; i < POOL; i++) {
       const material = new THREE.MeshBasicMaterial({
         color: 0xffffff,
-        map: null,
         transparent: true,
         opacity: 0,
         toneMapped: false,
-        side: THREE.FrontSide,
+        depthWrite: true,
       });
       const mesh = new THREE.Mesh(this.geometry, material);
       mesh.frustumCulled = false;
@@ -145,16 +137,18 @@ export class Gallery {
       const plane = {
         mesh,
         index: i,
-        dataIndex: null,
+        seq: null,
         listIndex: -1,
         filterEpoch: -1,
         stem: null,
+        item: null,
         aspect: 1,
-        appear: 0,        // 0..1 fade-in progress
+        appear: 0,
         baseHeight: BASE_HEIGHT,
         offsetX: 0,
         offsetY: 0,
         roll: 0,
+        loadingStem: null,
       };
       mesh.userData.plane = plane;
       this.planes.push(plane);
@@ -162,103 +156,103 @@ export class Gallery {
     }
   }
 
-  // ---- texture loading with a small LRU cache -------------------------------
-  _touchCache(stem) {
-    const idx = this._cacheOrder.indexOf(stem);
-    if (idx !== -1) this._cacheOrder.splice(idx, 1);
-    this._cacheOrder.push(stem);
-    while (this._cacheOrder.length > this._cacheLimit) {
-      const evict = this._cacheOrder.shift();
-      // never evict something currently shown
+  _touchTex(stem) {
+    const i = this._texOrder.indexOf(stem);
+    if (i !== -1) this._texOrder.splice(i, 1);
+    this._texOrder.push(stem);
+    while (this._texOrder.length > this._texLimit) {
+      const evict = this._texOrder.shift();
       if (this.planes.some((p) => p.stem === evict)) {
-        this._cacheOrder.push(evict);
-        if (this._cacheOrder.length <= this._cacheLimit + this.planes.length) break;
-        continue;
+        this._texOrder.push(evict);
+        break;
       }
-      const entry = this._textureCache.get(evict);
-      if (entry) { entry.texture.dispose(); this._textureCache.delete(evict); }
+      const entry = this._textures.get(evict);
+      if (entry) {
+        entry.texture.dispose();
+        this._textures.delete(evict);
+      }
     }
   }
 
-  _entryFromImage(source) {
-    const texture = new THREE.Texture(source);
+  _textureFromImage(img) {
+    const texture = new THREE.Texture(img);
+    texture.flipY = true;
     texture.colorSpace = THREE.SRGBColorSpace;
     texture.anisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
     texture.generateMipmaps = true;
     texture.minFilter = THREE.LinearMipmapLinearFilter;
+    texture.magFilter = THREE.LinearFilter;
     texture.needsUpdate = true;
-    const aspect = source.naturalHeight || source.height
-      ? (source.naturalWidth || source.width) / (source.naturalHeight || source.height)
-      : 1;
+    const aspect = img.naturalHeight ? img.naturalWidth / img.naturalHeight : 1;
     return { texture, aspect };
   }
 
-  _loadTexture(stem, thumbUrl, priority, cb) {
-    const cached = this._textureCache.get(stem);
-    if (cached) { this._touchCache(stem); cb(cached); return; }
-
-    const preloaded = getCachedThumb(stem);
-    if (preloaded) {
-      const entry = this._entryFromImage(preloaded);
-      this._textureCache.set(stem, entry);
-      this._touchCache(stem);
-      cb(entry);
-      return;
+  _getTextureEntry(stem, url, priority) {
+    const cached = this._textures.get(stem);
+    if (cached) {
+      this._touchTex(stem);
+      return Promise.resolve(cached);
     }
 
-    requestThumb(stem, thumbUrl, priority).then((source) => {
-      if (!source) { cb(null); return; }
-      const entry = this._entryFromImage(source);
-      this._textureCache.set(stem, entry);
-      this._touchCache(stem);
-      cb(entry);
+    const img = getCachedImage(stem);
+    if (img) {
+      const entry = this._textureFromImage(img);
+      this._textures.set(stem, entry);
+      this._touchTex(stem);
+      return Promise.resolve(entry);
+    }
+
+    return requestThumb(stem, url, priority).then((loaded) => {
+      if (!loaded) return null;
+      let entry = this._textures.get(stem);
+      if (!entry) {
+        entry = this._textureFromImage(loaded);
+        this._textures.set(stem, entry);
+        this._touchTex(stem);
+      }
+      return entry;
     });
   }
 
-  _prefetchAround(scroll) {
-    const base = Math.floor(scroll);
-    prefetchRange(this.items, base, POOL + 8, 0);
-    prefetchRange(this.items, base + POOL, 40, 1);
-  }
-
-  _clearTextureCache() {
-    for (const entry of this._textureCache.values()) {
-      entry.texture.dispose();
-    }
-    this._textureCache.clear();
-    this._cacheOrder = [];
-  }
-
-  _listIndexForSeq(seq) {
+  _listIndex(seq) {
     if (!this.N) return -1;
     return ((seq % this.N) + this.N) % this.N;
   }
 
-  /** Linear catalogue order: each scroll step advances by one item, no repeat until N. */
-  _absoluteSeqForPlane(plane, scroll = this.scroll) {
+  _seqForPlane(plane, scroll) {
     return Math.floor(scroll) + plane.index;
   }
 
   _clearPlane(plane) {
-    plane.dataIndex = null;
+    plane.seq = null;
     plane.listIndex = -1;
     plane.filterEpoch = -1;
     plane.stem = null;
     plane.item = null;
+    plane.loadingStem = null;
     plane.appear = 0;
-    plane.mesh.material.map = null;
-    plane.mesh.material.opacity = 0;
-    plane.mesh.material.needsUpdate = true;
     plane.mesh.visible = false;
+    plane.mesh.material.opacity = 0;
+    plane.mesh.material.map = null;
+    plane.mesh.material.needsUpdate = true;
   }
 
-  _assignData(plane, seq) {
+  _applyTexture(plane, entry, instant = false) {
+    plane.aspect = entry.aspect;
+    plane.mesh.material.map = entry.texture;
+    plane.mesh.material.needsUpdate = true;
+    plane.mesh.visible = true;
+    plane.appear = instant ? 1 : Math.min(plane.appear, 0.35);
+    plane.loadingStem = null;
+  }
+
+  _assignPlane(plane, seq) {
     if (!this.N) {
       this._clearPlane(plane);
       return;
     }
 
-    const listIndex = this._listIndexForSeq(seq);
+    const listIndex = this._listIndex(seq);
     const item = this.items[listIndex];
     if (!item) {
       this._clearPlane(plane);
@@ -266,69 +260,81 @@ export class Gallery {
     }
 
     if (
-      plane.dataIndex === seq &&
+      plane.seq === seq &&
       plane.listIndex === listIndex &&
       plane.filterEpoch === this._filterEpoch &&
-      plane.stem === item.stem
+      plane.stem === item.stem &&
+      plane.mesh.material.map
     ) {
       return;
     }
 
-    plane.dataIndex = seq;
+    const hadMap = !!plane.mesh.material.map;
+    plane.seq = seq;
     plane.listIndex = listIndex;
     plane.filterEpoch = this._filterEpoch;
     plane.item = item;
     plane.stem = item.stem;
+    plane.loadingStem = item.stem;
 
-    const s = Math.abs(listIndex) + 1 + this._filterEpoch * 10000;
+    const s = listIndex + 1 + this._filterEpoch * 10000;
     const pos = layoutOffsets(s);
     plane.offsetX = pos.x;
     plane.offsetY = pos.y;
     plane.baseHeight = BASE_HEIGHT * (0.92 + rand(s * 5.29) * 0.45);
     plane.roll = (rand(s * 7.13) - 0.5) * 0.09;
-    plane.appear = 0;
 
-    plane.mesh.material.map = null;
-    plane.mesh.material.opacity = 0;
-    plane.mesh.visible = false;
-    plane.mesh.material.needsUpdate = true;
+    if (!hadMap) {
+      plane.appear = 0;
+      plane.mesh.material.opacity = 0;
+      plane.mesh.visible = false;
+    }
 
-    const requested = item.stem;
-    this._loadTexture(item.stem, item.thumb, 0, (entry) => {
-      if (plane.stem !== requested) return;
-      if (!entry) return;
-      plane.aspect = entry.aspect;
-      plane.mesh.material.map = entry.texture;
-      plane.mesh.material.needsUpdate = true;
-      plane.mesh.visible = true;
-      if (this._fx) {
-        plane.appear = 1;
-        plane.mesh.material.opacity = this._fx.phase === "in" ? 0.15 : 1;
-      }
+    const stem = item.stem;
+    const url = item.thumb;
+
+    const cached = this._textures.get(stem);
+    if (cached) {
+      this._applyTexture(plane, cached, true);
+      return;
+    }
+
+    this._getTextureEntry(stem, url, 0).then((entry) => {
+      if (!entry || plane.loadingStem !== stem) return;
+      this._applyTexture(plane, entry, hadMap || getCachedImage(stem) !== null);
     });
   }
 
   _refreshAllPlanes() {
     for (const plane of this.planes) {
-      this._assignData(plane, this._absoluteSeqForPlane(plane));
+      this._assignPlane(plane, this._seqForPlane(plane));
     }
   }
 
-  // ---- main update ----------------------------------------------------------
+  _prefetch(scroll, velocity) {
+    const ahead = indicesAround(this.items, scroll, POOL + 24, velocity);
+    prefetchIndices(this.items, ahead, 0);
+    const behind = indicesAround(this.items, scroll - 6, 12, -1);
+    prefetchIndices(this.items, behind, 2);
+  }
+
   update() {
     const dt = Math.min(this._clock.getDelta(), 0.05);
 
-    // smooth, inertial scroll
     this.target += this.velocity;
     this.velocity *= 0.9;
     if (Math.abs(this.velocity) < 0.00001) this.velocity = 0;
-    this.scroll += (this.target - this.scroll) * Math.min(1, dt * 7.5);
+    this.scroll += (this.target - this.scroll) * Math.min(1, dt * 8);
 
-    // filter transition (zoom / shuffle)
     const fxState = this._advanceTransition(dt);
     const effScroll = this.scroll + fxState.scrollOffset;
 
-    // subtle camera parallax toward the pointer
+    this._prefetchAt += dt;
+    if (this._prefetchAt >= 0.08) {
+      this._prefetchAt = 0;
+      this._prefetch(effScroll, this.velocity);
+    }
+
     this.camTilt.x += (this.pointer.y * 0.05 - this.camTilt.x) * Math.min(1, dt * 4);
     this.camTilt.y += (this.pointer.x * 0.07 - this.camTilt.y) * Math.min(1, dt * 4);
     this.camera.rotation.x = this.camTilt.x + fxState.camRoll * 0.4;
@@ -337,33 +343,22 @@ export class Gallery {
     this.camera.position.x = -this.pointer.x * 0.5;
     this.camera.position.y = -this.pointer.y * 0.35;
 
-    this._prefetchTimer += dt;
-    if (this._prefetchTimer >= 0.12) {
-      this._prefetchTimer = 0;
-      this._prefetchAround(effScroll);
-    }
-    tickBackgroundPrefetch();
+    const inTransition = !!this._fx;
 
     for (const plane of this.planes) {
-      const seq = this._absoluteSeqForPlane(plane, effScroll);
-      const listIndex = this._listIndexForSeq(seq);
+      const seq = this._seqForPlane(plane, effScroll);
 
       if (
-        seq !== plane.dataIndex ||
-        listIndex !== plane.listIndex ||
+        seq !== plane.seq ||
         plane.filterEpoch !== this._filterEpoch
       ) {
-        this._assignData(plane, seq);
+        this._assignPlane(plane, seq);
       }
 
       const term = plane.index * SPACING - effScroll * SPACING;
       const lap = Math.floor(term / TOTAL);
-      const m = term - lap * TOTAL;
-      const z = Z_FRONT - m;
+      const z = Z_FRONT - (term - lap * TOTAL);
 
-      const mesh = plane.mesh;
-
-      // shuffle scatter: nudge planes on their own random vector, then settle
       let px = plane.offsetX;
       let py = plane.offsetY;
       let roll = plane.roll;
@@ -375,32 +370,31 @@ export class Gallery {
         py += (r2 - 0.5) * 18 * fxState.shuffle;
         roll += (r3 - 0.5) * 1.6 * fxState.shuffle;
       }
+
+      const mesh = plane.mesh;
       mesh.position.set(px, py, z);
 
       const h = plane.baseHeight;
-      const w = h * plane.aspect;
-      mesh.scale.set(w, h, 1);
+      mesh.scale.set(h * plane.aspect, h, 1);
       mesh.rotation.z = roll;
 
-      // fade in as it emerges; fade out just before it slips behind the camera
-      if (this._fx) {
-        if (mesh.visible) {
-          mesh.material.opacity = fxState.fade;
-        }
-      } else {
-        if (mesh.visible) {
-          plane.appear = Math.min(1, plane.appear + dt * 4.5);
-        }
-        const distFront = Z_FRONT - z;
-        const exitFade = THREE.MathUtils.clamp(distFront / 4, 0, 1);
-        mesh.material.opacity = plane.appear * exitFade;
+      if (!mesh.visible || !mesh.material.map) continue;
+
+      if (inTransition) {
+        mesh.material.opacity = fxState.fade;
+        continue;
       }
+
+      const distFront = THREE.MathUtils.clamp(Z_FRONT - z, 0, TOTAL);
+      const exitFade = THREE.MathUtils.smoothstep(distFront, 0.8, 5.5);
+      const enterFade = THREE.MathUtils.clamp(plane.appear + dt * 6, 0, 1);
+      plane.appear = enterFade;
+      mesh.material.opacity = enterFade * exitFade;
     }
 
     this.renderer.render(this.scene, this.camera);
   }
 
-  // advance the active transition and return its visual contribution
   _advanceTransition(dt) {
     if (!this._fx) return { scrollOffset: 0, fade: 1, shuffle: 0, camRoll: 0 };
 
@@ -421,7 +415,7 @@ export class Gallery {
         scrollOffset = e * 1.5;
         camRoll = e * 0.08;
       } else {
-        scrollOffset = e * ZOOM_RUSH;   // rush forward, "into" the objects
+        scrollOffset = e * ZOOM_RUSH;
       }
       if (p >= 1) {
         this._applyFilterNow(fx.filterId);
@@ -436,7 +430,7 @@ export class Gallery {
         scrollOffset = -(1 - e) * 2.5;
         camRoll = (1 - e) * -0.06;
       } else {
-        scrollOffset = -(1 - e) * ZOOM_FAR;  // come rushing back from far
+        scrollOffset = -(1 - e) * ZOOM_FAR;
       }
       if (p >= 1) this._fx = null;
     }
@@ -444,7 +438,6 @@ export class Gallery {
     return { scrollOffset, fade, shuffle, camRoll };
   }
 
-  // ---- interaction ----------------------------------------------------------
   raycastAt(clientX, clientY) {
     this._tmpNDC.set(
       (clientX / window.innerWidth) * 2 - 1,
@@ -452,7 +445,7 @@ export class Gallery {
     );
     this.raycaster.setFromCamera(this._tmpNDC, this.camera);
     const meshes = this.planes
-      .filter((p) => p.mesh.visible && p.mesh.material.opacity > 0.25)
+      .filter((p) => p.mesh.visible && p.mesh.material.opacity > 0.2)
       .map((p) => p.mesh);
     const hits = this.raycaster.intersectObjects(meshes, false);
     if (hits.length) return hits[0].object.userData.plane.item;
@@ -467,13 +460,10 @@ export class Gallery {
   }
 
   addScroll(delta) {
-    // delta in plane units; feed into inertial velocity
-    this.velocity += delta * 0.18;
-    this.target += delta * 0.3;
+    this.velocity += delta * 0.2;
+    this.target += delta * 0.35;
   }
 
-  // Start an animated transition to a new filter. Returns the resulting count
-  // so the UI can update the number immediately.
   setFilter(filterId) {
     if (this.filterId === filterId && filterId !== "random") return this.N;
 
@@ -490,13 +480,11 @@ export class Gallery {
     return filterItems(this.allItems, filterId).length;
   }
 
-  // Actually swap the data set (called at the midpoint of the transition).
   _applyFilterNow(filterId) {
     this.filterId = filterId;
     this.items = filterItems(this.allItems, filterId);
     this.N = this.items.length;
     this._filterEpoch += 1;
-    this._clearTextureCache();
 
     for (const plane of this.planes) {
       this._clearPlane(plane);
@@ -505,8 +493,12 @@ export class Gallery {
     this.scroll = 0;
     this.target = 0;
     this.velocity = 0;
-    startBackgroundPrefetch(this.items);
+
+    warmWindow(this.items, POOL + 20, 2000).then(() => {
+      this._refreshAllPlanes();
+    });
     this._refreshAllPlanes();
+
     return this.N;
   }
 
@@ -519,3 +511,5 @@ export class Gallery {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   }
 }
+
+export { warmWindow };

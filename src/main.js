@@ -1,6 +1,5 @@
-import { Gallery } from "./gallery.js";
+import { Gallery, warmWindow } from "./gallery.js";
 import { Lightbox } from "./lightbox.js";
-import { warmInitial, startBackgroundPrefetch } from "./thumbLoader.js";
 
 const loaderEl = document.getElementById("loader");
 const loaderBar = document.getElementById("loaderBar");
@@ -8,6 +7,10 @@ const loaderPct = document.getElementById("loaderPct");
 const loaderText = document.getElementById("loaderText");
 const hintEl = document.getElementById("hint");
 const countEl = document.getElementById("count");
+
+const WARM_COUNT = 50;
+const WARM_MAX_MS = 4000;
+const WARM_MIN_OK = 12;
 
 function setLoaderProgress(pct, text) {
   const p = Math.max(0, Math.min(100, Math.round(pct)));
@@ -30,27 +33,25 @@ async function boot() {
   }
 
   countEl.textContent = items.length;
-  setLoaderProgress(12, "Erste Bilder werden geladen…");
+  setLoaderProgress(15, "Startbilder werden geladen…");
 
-  const { ok } = await warmInitial(items, 30, 3500, (loaded, total) => {
-    const pct = 12 + Math.round((loaded / total) * 85);
-    setLoaderProgress(pct, `Startansicht… ${loaded} / ${total}`);
+  const { ok } = await warmWindow(items, WARM_COUNT, WARM_MAX_MS, (loaded, total) => {
+    const pct = 15 + Math.round((loaded / total) * 80);
+    setLoaderProgress(pct, `Vorbereitung… ${loaded} / ${total}`);
   });
 
-  if (ok === 0) {
-    setLoaderProgress(100, "Bilder konnten nicht geladen werden.");
+  if (ok < WARM_MIN_OK) {
+    setLoaderProgress(100, "Verbindung zu langsam – bitte neu laden.");
     return;
   }
 
   setLoaderProgress(100, "Galerie startet…");
-  startBackgroundPrefetch(items);
 
   const canvas = document.getElementById("scene");
   const gallery = new Gallery(canvas, items, "figuren");
   const lightbox = new Lightbox();
   const filtersEl = document.getElementById("filters");
 
-  // --- info modal -----------------------------------------------------------
   const infoModal = document.getElementById("infoModal");
   const infoBtn = document.getElementById("infoBtn");
   const infoClose = document.getElementById("infoClose");
@@ -81,18 +82,15 @@ async function boot() {
     if (!btn) return;
     e.preventDefault();
     e.stopPropagation();
-
-    const filterId = btn.dataset.filter;
-    gallery.setFilter(filterId);
+    gallery.setFilter(btn.dataset.filter);
     filtersEl.querySelectorAll(".hud__filter").forEach((el) => {
       el.classList.toggle("is-active", el === btn);
     });
     dismissHint();
   });
 
-  setTimeout(() => loaderEl.classList.add("hide"), 350);
+  setTimeout(() => loaderEl.classList.add("hide"), 300);
 
-  // --- input: wheel ---------------------------------------------------------
   window.addEventListener(
     "wheel",
     (e) => {
@@ -103,7 +101,6 @@ async function boot() {
     { passive: false }
   );
 
-  // --- input: keyboard ------------------------------------------------------
   window.addEventListener("keydown", (e) => {
     if (lightbox.isOpen) return;
     if (e.key === "ArrowDown" || e.key === "PageDown" || e.key === " ") {
@@ -115,7 +112,6 @@ async function boot() {
     }
   });
 
-  // --- input: pointer (drag + click) ----------------------------------------
   let dragging = false;
   let moved = 0;
   let lastY = 0;
@@ -185,7 +181,6 @@ async function boot() {
     pointerUp(t.clientX, t.clientY);
   });
 
-  // --- hint dismissal -------------------------------------------------------
   let hintDismissed = false;
   function dismissHint() {
     if (hintDismissed) return;
@@ -193,7 +188,6 @@ async function boot() {
     hintEl.classList.add("hide");
   }
 
-  // --- render loop ----------------------------------------------------------
   function loop() {
     gallery.update();
     requestAnimationFrame(loop);
