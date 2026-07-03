@@ -1,10 +1,5 @@
 import * as THREE from "three";
 import { filterItems, normalizeCategory, FILTERS } from "./filters.js";
-import {
-  getCachedImage,
-  requestThumb,
-  prefetchListIndices,
-} from "./thumbLoader.js";
 
 const BG_COLOR = 0xefece5;
 
@@ -20,9 +15,6 @@ const BASE_HEIGHT = 4.0;    // base world height of an image plane
 // --- filter transition (zoom / shuffle) ------------------------------------
 const ZOOM_RUSH = 5.2;      // how far the scroll rushes forward while zooming out
 const ZOOM_FAR = 4.2;       // how far behind objects start when zooming back in
-
-const LOOK_AHEAD = 14;      // scroll steps to prefetch forward
-const LOOK_BEHIND = 8;        // scroll steps to prefetch backward
 
 // deterministic pseudo-random from an integer seed -> [0,1)
 function rand(seed) {
@@ -103,8 +95,7 @@ export class Gallery {
 
     this._textureCache = new Map();   // stem -> { texture, aspect }
     this._cacheOrder = [];            // LRU order of stems
-    this._cacheLimit = 120;
-    this._prefetchAt = 0;
+    this._cacheLimit = 90;
     this._filterEpoch = 0;
     this._fx = null;   // active filter transition, or null
 
@@ -194,40 +185,28 @@ export class Gallery {
     }
   }
 
-  _entryFromImage(img) {
-    const texture = new THREE.Texture(img);
-    texture.colorSpace = THREE.SRGBColorSpace;
-    texture.anisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
-    texture.generateMipmaps = true;
-    texture.minFilter = THREE.LinearMipmapLinearFilter;
-    texture.needsUpdate = true;
-    const aspect = img.naturalHeight ? img.naturalWidth / img.naturalHeight : 1;
-    return { texture, aspect };
-  }
-
-  _loadTexture(stem, thumbUrl, cb, priority = 0) {
+  _loadTexture(stem, thumbUrl, cb) {
     const cached = this._textureCache.get(stem);
     if (cached) { this._touchCache(stem); cb(cached); return; }
-
-    const img = getCachedImage(stem);
-    if (img) {
-      const entry = this._entryFromImage(img);
-      this._textureCache.set(stem, entry);
-      this._touchCache(stem);
-      cb(entry);
-      return;
-    }
-
-    requestThumb(stem, thumbUrl, priority).then((loaded) => {
-      if (!loaded) { cb(null); return; }
-      let entry = this._textureCache.get(stem);
-      if (!entry) {
-        entry = this._entryFromImage(loaded);
+    const loader = new THREE.TextureLoader();
+    loader.setCrossOrigin("anonymous");
+    loader.load(
+      thumbUrl,
+      (texture) => {
+        texture.colorSpace = THREE.SRGBColorSpace;
+        texture.anisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
+        texture.generateMipmaps = true;
+        texture.minFilter = THREE.LinearMipmapLinearFilter;
+        const img = texture.image;
+        const aspect = img && img.height ? img.width / img.height : 1;
+        const entry = { texture, aspect };
         this._textureCache.set(stem, entry);
         this._touchCache(stem);
-      }
-      cb(entry);
-    });
+        cb(entry);
+      },
+      undefined,
+      () => cb(null)
+    );
   }
 
   _clearTextureCache() {
@@ -253,45 +232,6 @@ export class Gallery {
     const term = plane.index * SPACING - scroll * SPACING;
     const lap = Math.floor(term / TOTAL);
     return plane.index - lap * POOL;
-  }
-
-  _seqForIndex(index, scroll) {
-    const term = index * SPACING - scroll * SPACING;
-    const lap = Math.floor(term / TOTAL);
-    return index - lap * POOL;
-  }
-
-  /** Prefetch thumbnails for visible planes + lookahead / lookbehind window. */
-  _prefetchNear(scroll, velocity) {
-    if (!this.N) return;
-
-    const visible = this.planes.map((plane) =>
-      this._listIndexForSeq(this._seqForPlane(plane, scroll))
-    );
-    prefetchListIndices(this.items, visible, 0);
-
-    const extra = Math.min(18, Math.ceil(Math.abs(velocity) * 45));
-    const fwdSteps = (velocity >= 0 ? LOOK_AHEAD : LOOK_BEHIND) + extra;
-    const backSteps = (velocity >= 0 ? LOOK_BEHIND : LOOK_AHEAD) + extra;
-
-    const ahead = [];
-    const behind = [];
-
-    for (let step = 1; step <= fwdSteps; step++) {
-      const s = scroll + step;
-      for (let i = 0; i < POOL; i++) {
-        ahead.push(this._listIndexForSeq(this._seqForIndex(i, s)));
-      }
-    }
-    for (let step = 1; step <= backSteps; step++) {
-      const s = scroll - step;
-      for (let i = 0; i < POOL; i++) {
-        behind.push(this._listIndexForSeq(this._seqForIndex(i, s)));
-      }
-    }
-
-    prefetchListIndices(this.items, ahead, 1);
-    prefetchListIndices(this.items, behind, 2);
   }
 
   _clearPlane(plane) {
@@ -356,7 +296,7 @@ export class Gallery {
       plane.mesh.material.map = entry.texture;
       plane.mesh.material.needsUpdate = true;
       plane.mesh.visible = true;
-    }, 0);
+    });
   }
 
   _refreshAllPlanes() {
@@ -387,12 +327,6 @@ export class Gallery {
     this.camera.rotation.z = fxState.camRoll;
     this.camera.position.x = -this.pointer.x * 0.5;
     this.camera.position.y = -this.pointer.y * 0.35;
-
-    this._prefetchAt += dt;
-    if (this._prefetchAt >= 0.07) {
-      this._prefetchAt = 0;
-      this._prefetchNear(effScroll, this.velocity);
-    }
 
     for (const plane of this.planes) {
       const seq = this._seqForPlane(plane, effScroll);
