@@ -81,7 +81,7 @@ async function boot() {
   });
 
   setLoaderProgress(32, "Bilder werden geladen…");
-  const warmupCount = Math.min(20, items.length);
+  const warmupCount = Math.min(14, items.length);
   let done = 0;
   await Promise.all(
     items.slice(0, warmupCount).map(

@@ -1,23 +1,20 @@
 import * as THREE from "three";
-import { firstCatalogIndex } from "./filters.js";
+import { filterItems } from "./filters.js";
 import { warmItems } from "./browserWarmup.js";
 
 const BG_COLOR = 0xefece5;
 
-// --- corridor / pool configuration -----------------------------------------
-const POOL = 30;            // number of image planes living at once
-const SPACING = 6.2;        // distance between consecutive planes on the Z axis
+const POOL = 30;
+const SPACING = 6.2;
 const TOTAL = POOL * SPACING;
-const Z_FRONT = 6;          // where a plane recycles after passing the camera
+const Z_FRONT = 6;
 const FOG_NEAR = 14;
 const FOG_FAR = 122;
-const BASE_HEIGHT = 4.0;    // base world height of an image plane
+const BASE_HEIGHT = 4.0;
 
-// --- filter transition (zoom / shuffle) ------------------------------------
-const ZOOM_RUSH = 5.2;      // how far the scroll rushes forward while zooming out
-const ZOOM_FAR = 4.2;       // how far behind objects start when zooming back in
+const ZOOM_RUSH = 5.2;
+const ZOOM_FAR = 4.2;
 
-// deterministic pseudo-random from an integer seed -> [0,1)
 function rand(seed) {
   const x = Math.sin(seed * 127.1 + 311.7) * 43758.5453;
   return x - Math.floor(x);
@@ -26,32 +23,24 @@ function rand(seed) {
 function easeInCubic(t) { return t * t * t; }
 function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
 
-// Place each image in a wide field with a clear "hole" in the centre so
-// objects emerge from the periphery / corners rather than the middle.
 function layoutOffsets(seed) {
   const mode = rand(seed * 1.91);
 
   if (mode < 0.38) {
-    // anchored near screen corners / edges
     const quad = Math.floor(rand(seed * 2.44) * 4);
     const signX = quad % 2 === 0 ? -1 : 1;
     const signY = quad < 2 ? -1 : 1;
     const magX = 5.5 + rand(seed * 3.11) * 9;
     const magY = 4 + rand(seed * 4.22) * 7;
-    const jitterX = (rand(seed * 5.33) - 0.5) * 3;
-    const jitterY = (rand(seed * 6.44) - 0.5) * 2.5;
     return {
-      x: signX * magX + jitterX,
-      y: signY * magY + jitterY,
+      x: signX * magX + (rand(seed * 5.33) - 0.5) * 3,
+      y: signY * magY + (rand(seed * 6.44) - 0.5) * 2.5,
     };
   }
 
   if (mode < 0.72) {
-    // outer ring – minimum radius keeps the centre empty
     const ang = rand(seed * 2.13) * Math.PI * 2;
-    const minR = 4.5;
-    const maxR = 15;
-    const r = minR + Math.pow(rand(seed * 3.71), 0.5) * (maxR - minR);
+    const r = 4.5 + Math.pow(rand(seed * 3.71), 0.5) * 10.5;
     const stretchY = 0.72 + rand(seed * 4.92) * 0.45;
     return {
       x: Math.cos(ang) * r + (rand(seed * 7.15) - 0.5) * 2.5,
@@ -59,38 +48,33 @@ function layoutOffsets(seed) {
     };
   }
 
-  // scattered field – wide box, centre repelled
   let x = (rand(seed * 9.37) - 0.5) * 28;
   let y = (rand(seed * 10.48) - 0.5) * 19;
-  const cx = Math.abs(x);
-  const cy = Math.abs(y);
-  if (cx < 4 && cy < 3) {
-    const push = rand(seed * 11.59) > 0.5 ? 1 : -1;
-    x += push * (5 - cx);
-    y += (rand(seed * 12.61) > 0.5 ? 1 : -1) * (4 - cy);
+  if (Math.abs(x) < 4 && Math.abs(y) < 3) {
+    x += (rand(seed * 11.59) > 0.5 ? 1 : -1) * (5 - Math.abs(x));
+    y += (rand(seed * 12.61) > 0.5 ? 1 : -1) * (4 - Math.abs(y));
   }
   return { x, y };
 }
-
 
 export class Gallery {
   constructor(canvas, items, filterId = "figuren") {
     this.canvas = canvas;
     this.allItems = items;
     this.filterId = filterId;
-    this._order = items.map((_, i) => i);
-    this.N = items.length;
+    this.items = filterItems(items, filterId);
+    this.N = this.items.length;
 
-    // start a few steps in so images are already in the sweet spot on first paint
     this.scroll = 0;
     this.target = 0;
     this.velocity = 0;
-    this.pointer = new THREE.Vector2(0, 0); // normalized -1..1
+    this.pointer = new THREE.Vector2(0, 0);
     this.camTilt = new THREE.Vector2(0, 0);
 
-    this._textureCache = new Map();   // stem -> { texture, aspect }
-    this._cacheOrder = [];            // LRU order of stems
+    this._textureCache = new Map();
+    this._cacheOrder = [];
     this._cacheLimit = 120;
+    this._prefetchAt = 0;
     this._filterEpoch = 0;
     this._fx = null;
 
@@ -103,7 +87,6 @@ export class Gallery {
 
     this.raycaster = new THREE.Raycaster();
     this._tmpNDC = new THREE.Vector2();
-
     this._clock = new THREE.Clock();
     this._onResize();
     window.addEventListener("resize", () => this._onResize());
@@ -153,8 +136,9 @@ export class Gallery {
         listIndex: -1,
         filterEpoch: -1,
         stem: null,
+        item: null,
         aspect: 1,
-        appear: 0,        // 0..1 fade-in progress
+        appear: 0,
         baseHeight: BASE_HEIGHT,
         offsetX: 0,
         offsetY: 0,
@@ -166,21 +150,22 @@ export class Gallery {
     }
   }
 
-  // ---- texture loading with a small LRU cache -------------------------------
   _touchCache(stem) {
     const idx = this._cacheOrder.indexOf(stem);
     if (idx !== -1) this._cacheOrder.splice(idx, 1);
     this._cacheOrder.push(stem);
     while (this._cacheOrder.length > this._cacheLimit) {
       const evict = this._cacheOrder.shift();
-      // never evict something currently shown
       if (this.planes.some((p) => p.stem === evict)) {
         this._cacheOrder.push(evict);
         if (this._cacheOrder.length <= this._cacheLimit + this.planes.length) break;
         continue;
       }
       const entry = this._textureCache.get(evict);
-      if (entry) { entry.texture.dispose(); this._textureCache.delete(evict); }
+      if (entry) {
+        entry.texture.dispose();
+        this._textureCache.delete(evict);
+      }
     }
   }
 
@@ -219,34 +204,29 @@ export class Gallery {
     pending.then(cb);
   }
 
-  _clearTextureCache() {
-    for (const entry of this._textureCache.values()) {
-      entry.texture.dispose();
-    }
-    this._textureCache.clear();
-    this._cacheOrder = [];
-  }
-
-  _catalogIndex(seq) {
-    if (!this.N) return -1;
-    const pos = ((seq % this.N) + this.N) % this.N;
-    return this._order[pos];
-  }
-
   _listIndexForSeq(seq) {
-    return this._catalogIndex(seq);
+    if (!this.N) return -1;
+    return ((seq % this.N) + this.N) % this.N;
   }
 
+  /** Originales Pool-Recycling – Z-Bewegung bleibt kontinuierlich, kein Sprung. */
   _seqForPlane(plane, scroll = this.scroll) {
-    return Math.floor(scroll) + plane.index;
+    const term = plane.index * SPACING - scroll * SPACING;
+    const lap = Math.floor(term / TOTAL);
+    return plane.index - lap * POOL;
   }
 
   _prefetchHints(scroll) {
     if (!this.N) return;
-    const base = Math.floor(scroll);
-    const indices = [];
-    for (let i = -8; i < 40; i++) indices.push(this._catalogIndex(base + i));
-    warmItems(this.allItems, indices);
+    const indices = new Set();
+    for (const plane of this.planes) {
+      indices.add(this._listIndexForSeq(this._seqForPlane(plane, scroll)));
+    }
+    for (const plane of this.planes) {
+      indices.add(this._listIndexForSeq(this._seqForPlane(plane, scroll + 8)));
+      indices.add(this._listIndexForSeq(this._seqForPlane(plane, scroll - 4)));
+    }
+    warmItems(this.items, [...indices]);
   }
 
   _clearPlane(plane) {
@@ -269,19 +249,19 @@ export class Gallery {
     }
 
     const listIndex = this._listIndexForSeq(seq);
-    const item = this.allItems[listIndex];
+    const item = this.items[listIndex];
     if (!item) {
       this._clearPlane(plane);
       return;
     }
 
     if (
+      plane.dataIndex === seq &&
       plane.listIndex === listIndex &&
       plane.filterEpoch === this._filterEpoch &&
       plane.stem === item.stem &&
       plane.mesh.material.map
     ) {
-      plane.dataIndex = seq;
       return;
     }
 
@@ -317,8 +297,7 @@ export class Gallery {
 
     const requested = item.stem;
     this._loadTexture(item.stem, item.thumb, (entry) => {
-      if (plane.stem !== requested) return;
-      if (!entry) return;
+      if (plane.stem !== requested || !entry) return;
       plane.aspect = entry.aspect;
       plane.mesh.material.map = entry.texture;
       plane.mesh.material.needsUpdate = true;
@@ -332,22 +311,23 @@ export class Gallery {
     }
   }
 
-  // ---- main update ----------------------------------------------------------
   update() {
     const dt = Math.min(this._clock.getDelta(), 0.05);
 
-    // smooth, inertial scroll
     this.target += this.velocity;
     this.velocity *= 0.9;
     if (Math.abs(this.velocity) < 0.00001) this.velocity = 0;
     this.scroll += (this.target - this.scroll) * Math.min(1, dt * 7.5);
 
-    // filter transition (zoom / shuffle)
     const fxState = this._advanceTransition(dt);
     const effScroll = this.scroll + fxState.scrollOffset;
-    this._prefetchHints(effScroll);
 
-    // subtle camera parallax toward the pointer
+    this._prefetchAt += dt;
+    if (this._prefetchAt >= 0.15) {
+      this._prefetchAt = 0;
+      this._prefetchHints(effScroll);
+    }
+
     this.camTilt.x += (this.pointer.y * 0.05 - this.camTilt.x) * Math.min(1, dt * 4);
     this.camTilt.y += (this.pointer.x * 0.07 - this.camTilt.y) * Math.min(1, dt * 4);
     this.camera.rotation.x = this.camTilt.x + fxState.camRoll * 0.4;
@@ -361,22 +341,17 @@ export class Gallery {
       const listIndex = this._listIndexForSeq(seq);
 
       if (
+        seq !== plane.dataIndex ||
         listIndex !== plane.listIndex ||
         plane.filterEpoch !== this._filterEpoch
       ) {
         this._assignData(plane, seq);
-      } else {
-        plane.dataIndex = seq;
       }
 
       const term = plane.index * SPACING - effScroll * SPACING;
       const lap = Math.floor(term / TOTAL);
-      const m = term - lap * TOTAL;
-      const z = Z_FRONT - m;
+      const z = Z_FRONT - (term - lap * TOTAL);
 
-      const mesh = plane.mesh;
-
-      // shuffle scatter: nudge planes on their own random vector, then settle
       let px = plane.offsetX;
       let py = plane.offsetY;
       let roll = plane.roll;
@@ -388,28 +363,25 @@ export class Gallery {
         py += (r2 - 0.5) * 18 * fxState.shuffle;
         roll += (r3 - 0.5) * 1.6 * fxState.shuffle;
       }
+
+      const mesh = plane.mesh;
       mesh.position.set(px, py, z);
 
       const h = plane.baseHeight;
-      const w = h * plane.aspect;
-      mesh.scale.set(w, h, 1);
+      mesh.scale.set(h * plane.aspect, h, 1);
       mesh.rotation.z = roll;
 
-      // fade in as it emerges; fade out just before it slips behind the camera
-      if (this._fx) {
-        if (mesh.visible) mesh.material.opacity = fxState.fade;
-      } else {
-        if (mesh.visible) plane.appear = Math.min(1, plane.appear + dt * 4.5);
-        const distFront = Z_FRONT - z;
-        const exitFade = THREE.MathUtils.clamp(distFront / 4, 0, 1);
-        mesh.material.opacity = plane.appear * exitFade;
+      if (mesh.visible) {
+        plane.appear = Math.min(1, plane.appear + dt * 4.5);
       }
+      const distFront = Z_FRONT - z;
+      const exitFade = THREE.MathUtils.clamp(distFront / 4, 0, 1);
+      mesh.material.opacity = plane.appear * exitFade * fxState.fade;
     }
 
     this.renderer.render(this.scene, this.camera);
   }
 
-  // advance the active transition and return its visual contribution
   _advanceTransition(dt) {
     if (!this._fx) return { scrollOffset: 0, fade: 1, shuffle: 0, camRoll: 0 };
 
@@ -430,7 +402,7 @@ export class Gallery {
         scrollOffset = e * 1.5;
         camRoll = e * 0.08;
       } else {
-        scrollOffset = e * ZOOM_RUSH;   // rush forward, "into" the objects
+        scrollOffset = e * ZOOM_RUSH;
       }
       if (p >= 1) {
         this._applyFilterNow(fx.filterId);
@@ -445,7 +417,7 @@ export class Gallery {
         scrollOffset = -(1 - e) * 2.5;
         camRoll = (1 - e) * -0.06;
       } else {
-        scrollOffset = -(1 - e) * ZOOM_FAR;  // come rushing back from far
+        scrollOffset = -(1 - e) * ZOOM_FAR;
       }
       if (p >= 1) this._fx = null;
     }
@@ -453,7 +425,6 @@ export class Gallery {
     return { scrollOffset, fade, shuffle, camRoll };
   }
 
-  // ---- interaction ----------------------------------------------------------
   raycastAt(clientX, clientY) {
     this._tmpNDC.set(
       (clientX / window.innerWidth) * 2 - 1,
@@ -478,11 +449,8 @@ export class Gallery {
   addScroll(delta) {
     this.velocity += delta * 0.18;
     this.target += delta * 0.3;
-    this._prefetchHints(this.target);
   }
 
-  // Start an animated transition to a new filter. Returns the resulting count
-  // so the UI can update the number immediately.
   setFilter(filterId) {
     if (this.filterId === filterId && filterId !== "random") return this.N;
 
@@ -496,31 +464,21 @@ export class Gallery {
       inDur: mode === "shuffle" ? 0.72 : 0.52,
     };
 
-    return this.N;
+    return filterItems(this.allItems, filterId).length;
   }
 
   _applyFilterNow(filterId) {
     this.filterId = filterId;
+    this.items = filterItems(this.allItems, filterId);
+    this.N = this.items.length;
     this._filterEpoch += 1;
 
-    if (filterId === "random") {
-      this._order = this.allItems.map((_, i) => i);
-      for (let i = this._order.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [this._order[i], this._order[j]] = [this._order[j], this._order[i]];
-      }
-      this.scroll = 0;
-      this.target = 0;
-    } else {
-      const jump = firstCatalogIndex(this.allItems, filterId);
-      this.scroll = jump;
-      this.target = jump;
-    }
-
-    this.velocity = 0;
-
     for (const plane of this.planes) this._clearPlane(plane);
-    this._prefetchHints(this.scroll);
+
+    this.scroll = 0;
+    this.target = 0;
+    this.velocity = 0;
+    this._prefetchHints(0);
     this._refreshAllPlanes();
     return this.N;
   }
