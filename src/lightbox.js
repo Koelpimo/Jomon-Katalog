@@ -68,7 +68,7 @@ export class Lightbox {
     this.el.setAttribute("aria-hidden", "false");
 
     const cat = [item.category, item.subcategory].filter(Boolean).join(" › ");
-    const subtitle = cat ? `${cat} · Jomon-Zeit · ID ${this._esc(item.id)}` : `Jomon-Zeit · ID ${this._esc(item.id)}`;
+    const subtitle = cat ? `${cat} · Jōmon-Zeit · ID ${this._esc(item.id)}` : `Jōmon-Zeit · ID ${this._esc(item.id)}`;
 
     const rows = [];
     if (item.name_orig && item.name_orig !== item.name) {
