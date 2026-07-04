@@ -1,8 +1,8 @@
 /** CSV category → UI filter (Buchkapitel) */
 export const FILTERS = [
   { id: "figuren", label: "01 Figuren", categories: ["Figuren"] },
-  { id: "vasen", label: "02 Gefäße", categories: ["Keramik"] },
-  { id: "artefakte", label: "03 Artefakte", categories: ["Alltagswerkzeuge"] },
+  { id: "vasen", label: "02 Gefäße", categories: ["Gefäße"] },
+  { id: "artefakte", label: "03 Artefakte", categories: ["Artefakte"] },
   { id: "random", label: "04 Zufall", categories: null },
 ];
 

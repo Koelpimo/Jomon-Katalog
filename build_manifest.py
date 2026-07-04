@@ -41,7 +41,9 @@ GENERIC_NAMES = {
     "",
     "doki",
     "keramik",
+    "gefäße",
     "figuren",
+    "artefakte",
     "alltagswerkzeuge",
     "schmuck",
 }
