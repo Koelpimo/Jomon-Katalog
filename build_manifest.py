@@ -88,7 +88,7 @@ def index_full_images():
 
 
 def discover_thumbs():
-    """Return sorted list of (stem, source_id, source_path, manifest_thumb_path)."""
+    """Return dict source_id -> (stem, source_id, source_path, manifest_thumb_path)."""
     found = {}
 
     def add_file(path, manifest_path):
@@ -97,7 +97,7 @@ def discover_thumbs():
         if not sid:
             return
         stem = os.path.splitext(name)[0]
-        found[stem] = (stem, sid, path, manifest_path)
+        found[sid] = (stem, sid, path, manifest_path)
 
     if os.path.isdir(OUT_THUMBS):
         for name in sorted(os.listdir(OUT_THUMBS)):
@@ -112,13 +112,14 @@ def discover_thumbs():
         for name in sorted(os.listdir(THUMB_DIR)):
             if name.lower().endswith((".webp", ".png")):
                 stem = os.path.splitext(name)[0]
-                if stem in found:
+                sid = source_id_from_name(name)
+                if not sid or sid in found:
                     continue
                 src = os.path.join(THUMB_DIR, name)
                 ext = os.path.splitext(name)[1]
                 add_file(src, "assets/thumbs/%s%s" % (stem, ext))
 
-    return [found[k] for k in sorted(found)]
+    return found
 
 
 def main():
@@ -135,36 +136,37 @@ def main():
     os.makedirs(OUT_THUMBS, exist_ok=True)
     os.makedirs(OUT_FULL, exist_ok=True)
 
-    csv_by_source = {}
+    csv_rows = []
     with open(CSV_PATH, encoding="utf-8-sig", newline="") as fh:
         for row in csv.DictReader(fh, delimiter=";"):
             sid = (row.get("source_id") or "").strip()
             if sid:
-                csv_by_source[sid] = row
+                csv_rows.append(row)
 
     full_by_source = index_full_images()
-    thumbs = discover_thumbs()
+    thumbs_by_source = discover_thumbs()
 
     items = []
     copied_thumbs = 0
     copied_full = 0
-    skipped_no_csv = 0
+    skipped_no_thumb = 0
     skipped_no_full = 0
 
-    for stem, sid, thumb_src, thumb_manifest in thumbs:
+    for row in csv_rows:
         if args.limit and len(items) >= args.limit:
             break
 
-        row = csv_by_source.get(sid)
-        if not row:
-            skipped_no_csv += 1
+        sid = (row.get("source_id") or "").strip()
+        thumb = thumbs_by_source.get(sid)
+        if not thumb:
+            skipped_no_thumb += 1
             continue
 
+        stem, _, thumb_src, thumb_manifest = thumb
         full_src = full_by_source.get(sid)
         if not full_src:
             skipped_no_full += 1
 
-        name_de = (row.get("Name_de") or "").strip()
         name = (row.get("Name") or "").strip()
         title = pick_title(row)
 
@@ -192,13 +194,11 @@ def main():
                     copied_full += 1
 
     manifest = {"count": len(items), "items": items}
-    items.sort(key=lambda it: int(it.get("id") or 0))
-    manifest["items"] = items
     with open(MANIFEST_PATH, "w", encoding="utf-8") as fh:
         json.dump(manifest, fh, ensure_ascii=False, indent=0)
 
     print("Items in manifest     : %d" % len(items))
-    print("Skipped (no CSV row)  : %d" % skipped_no_csv)
+    print("Skipped (no thumb)    : %d" % skipped_no_thumb)
     print("Skipped (no BW image) : %d" % skipped_no_full)
     if not args.no_copy:
         print("Copied thumbs         : %d" % copied_thumbs)
