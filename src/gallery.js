@@ -518,6 +518,7 @@ export class Gallery {
       }
       this._catalogBase = 0;
     } else {
+      this._order = this.allItems.map((_, i) => i);
       this._catalogBase = firstCatalogIndex(this.allItems, filterId);
     }
 

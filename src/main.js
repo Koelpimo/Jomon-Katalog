@@ -1,4 +1,4 @@
-import { Gallery } from "./gallery.js";
+import { Gallery } from "./gallery.js?v=31";
 import { Lightbox } from "./lightbox.js";
 
 const loaderEl = document.getElementById("loader");
