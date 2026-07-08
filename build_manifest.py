@@ -68,14 +68,6 @@ def source_id_from_name(filename):
     return m.group(1) if m else None
 
 
-def stem_from_image_path(value):
-    if not value:
-        return ""
-    name = os.path.basename(str(value).strip())
-    stem, _ = os.path.splitext(name)
-    return stem
-
-
 def public_asset_url(path):
     return "%s/%s" % (R2_PUBLIC_URL, str(path).lstrip("/"))
 
@@ -85,17 +77,6 @@ def copy_if_needed(src, dst):
         shutil.copy2(src, dst)
         return True
     return False
-
-
-def index_full_images_by_stem():
-    """Map stem -> absolute path of the canonical BW PNG."""
-    by_stem = {}
-    for name in os.listdir(FULL_DIR):
-        if not name.lower().endswith(".png") or " " in name:
-            continue
-        stem, _ = os.path.splitext(name)
-        by_stem[stem] = os.path.join(FULL_DIR, name)
-    return by_stem
 
 
 def index_full_images():
@@ -146,40 +127,6 @@ def discover_thumbs():
     return found
 
 
-def discover_thumbs_by_stem():
-    """Return dict stem -> (stem, source_id, source_path, manifest_thumb_path)."""
-    found = {}
-
-    def add_file(path, manifest_path):
-        name = os.path.basename(path)
-        sid = source_id_from_name(name)
-        if not sid:
-            return
-        stem = os.path.splitext(name)[0]
-        found[stem] = (stem, sid, path, manifest_path)
-
-    if os.path.isdir(OUT_THUMBS):
-        for name in sorted(os.listdir(OUT_THUMBS)):
-            if name.lower().endswith((".webp", ".png")):
-                ext = os.path.splitext(name)[1]
-                add_file(
-                    os.path.join(OUT_THUMBS, name),
-                    "assets/thumbs/%s%s" % (os.path.splitext(name)[0], ext),
-                )
-
-    if os.path.isdir(THUMB_DIR):
-        for name in sorted(os.listdir(THUMB_DIR)):
-            if name.lower().endswith((".webp", ".png")):
-                stem = os.path.splitext(name)[0]
-                if stem in found:
-                    continue
-                src = os.path.join(THUMB_DIR, name)
-                ext = os.path.splitext(name)[1]
-                add_file(src, "assets/thumbs/%s%s" % (stem, ext))
-
-    return found
-
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--limit", type=int, default=0,
@@ -202,9 +149,7 @@ def main():
                 csv_rows.append(row)
 
     full_by_source = index_full_images()
-    full_by_stem = index_full_images_by_stem()
     thumbs_by_source = discover_thumbs()
-    thumbs_by_stem = discover_thumbs_by_stem()
 
     items = []
     copied_thumbs = 0
@@ -217,14 +162,13 @@ def main():
             break
 
         sid = (row.get("source_id") or "").strip()
-        image_stem = stem_from_image_path(row.get("@Image"))
-        thumb = thumbs_by_stem.get(image_stem) or thumbs_by_source.get(sid)
+        thumb = thumbs_by_source.get(sid)
         if not thumb:
             skipped_no_thumb += 1
             continue
 
         stem, _, thumb_src, thumb_manifest = thumb
-        full_src = full_by_stem.get(image_stem) or full_by_source.get(sid)
+        full_src = full_by_source.get(sid)
         if not full_src:
             skipped_no_full += 1
 
