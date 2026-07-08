@@ -29,6 +29,7 @@ CSV_PATH = os.path.join(CATALOG_DIR, "jomon_katalog.csv")
 THUMB_DIR = os.path.join(CATALOG_DIR, "Jomon_Thumbnail")
 FULL_DIR = os.path.join(CATALOG_DIR, "Jomon_Bilder_bw")
 FULL_EXT = ".png"
+R2_PUBLIC_URL = "https://pub-7a7fc559df334dc88ac345e02927d2dd.r2.dev"
 
 OUT_THUMBS = os.path.join(HERE, "assets", "thumbs")
 OUT_FULL = os.path.join(HERE, "assets", "full")
@@ -73,6 +74,10 @@ def stem_from_image_path(value):
     name = os.path.basename(str(value).strip())
     stem, _ = os.path.splitext(name)
     return stem
+
+
+def public_asset_url(path):
+    return "%s/%s" % (R2_PUBLIC_URL, str(path).lstrip("/"))
 
 
 def copy_if_needed(src, dst):
@@ -236,8 +241,8 @@ def main():
             "size": (row.get("size") or "").strip(),
             "repository": (row.get("repository") or "").strip(),
             "url": (row.get("URL") or "").strip(),
-            "thumb": thumb_manifest,
-            "full": "assets/full/%s%s" % (stem, FULL_EXT) if full_src else None,
+            "thumb": public_asset_url(thumb_manifest),
+            "full": public_asset_url("assets/full/%s%s" % (stem, FULL_EXT)) if full_src else None,
         }
         items.append(item)
 
