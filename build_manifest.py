@@ -80,15 +80,27 @@ def copy_if_needed(src, dst):
 
 
 def index_full_images():
-    """Map source_id -> absolute path of the canonical BW PNG."""
+    """Map source_id -> absolute path of a BW PNG (website assets preferred).
+
+    Prefer already-published filenames under ``assets/full`` so R2 URLs stay
+    stable even after the catalog CSV renumbers ``@Image`` paths.
+    """
     by_source = {}
-    for name in os.listdir(FULL_DIR):
-        if not name.lower().endswith(".png") or " " in name:
-            continue
-        m = FULL_RE.match(name)
-        if not m:
-            continue
-        by_source[m.group(1)] = os.path.join(FULL_DIR, name)
+
+    def add_dir(directory):
+        if not os.path.isdir(directory):
+            return
+        for name in os.listdir(directory):
+            if not name.lower().endswith(".png") or " " in name:
+                continue
+            m = FULL_RE.match(name)
+            if not m:
+                continue
+            by_source[m.group(1)] = os.path.join(directory, name)
+
+    # Website/R2 filenames first, then catalog source folder as fallback.
+    add_dir(OUT_FULL)
+    add_dir(FULL_DIR)
     return by_source
 
 
@@ -171,6 +183,18 @@ def main():
         full_src = full_by_source.get(sid)
         if not full_src:
             skipped_no_full += 1
+            full_url = None
+        else:
+            # Keep the published filename (assets/full) so R2 links stay valid
+            # even when the CSV @Image numbers have changed.
+            full_name = os.path.basename(full_src)
+            full_abs = os.path.abspath(full_src)
+            out_full_abs = os.path.abspath(OUT_FULL)
+            if full_abs.startswith(out_full_abs + os.sep):
+                full_rel = "assets/full/%s" % full_name
+            else:
+                full_rel = "assets/full/%s%s" % (stem, FULL_EXT)
+            full_url = public_asset_url(full_rel)
 
         name = (row.get("Name") or "").strip()
         title = pick_title(row)
@@ -186,7 +210,7 @@ def main():
             "repository": (row.get("repository") or "").strip(),
             "url": (row.get("URL") or "").strip(),
             "thumb": public_asset_url(thumb_manifest),
-            "full": public_asset_url("assets/full/%s%s" % (stem, FULL_EXT)) if full_src else None,
+            "full": full_url,
         }
         items.append(item)
 
@@ -194,7 +218,7 @@ def main():
             thumb_ext = os.path.splitext(thumb_manifest)[1]
             if copy_if_needed(thumb_src, os.path.join(OUT_THUMBS, stem + thumb_ext)):
                 copied_thumbs += 1
-            if full_src:
+            if full_src and not os.path.abspath(full_src).startswith(os.path.abspath(OUT_FULL) + os.sep):
                 if copy_if_needed(full_src, os.path.join(OUT_FULL, stem + FULL_EXT)):
                     copied_full += 1
 
